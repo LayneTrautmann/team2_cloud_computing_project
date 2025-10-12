@@ -1,0 +1,218 @@
+---
+- name: Install Docker and Kubernetes prerequisites
+  hosts: kafka_cluster
+  become: true
+  gather_facts: yes
+
+  vars:
+    docker_gpg_dest: /etc/apt/keyrings/docker.gpg
+    docker_apt_repo: "deb [arch=amd64 signed-by={{ docker_gpg_dest }}] https://download.docker.com/linux/ubuntu {{ ansible_facts.distribution_release }} stable"
+    docker_packages:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+      - python3-docker
+    base_packages:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+    k8s_repo_key_url: https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key
+    k8s_repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /"
+    k8s_packages:
+      - kubelet
+      - kubeadm
+      - kubectl
+    registry_port: 5000
+    k8s_master_host: "{{ groups['kafka_broker'][0] }}"
+    registry_ip: "{{ hostvars[k8s_master_host].private_ip | default(hostvars[k8s_master_host].ansible_default_ipv4.address) }}"
+    registry_endpoint: "{{ registry_ip }}:{{ registry_port }}"
+
+  tasks:
+    - name: Ensure overlay and br_netfilter modules load at boot
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+        mode: "0644"
+
+    - name: Load required kernel modules now
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Configure Kubernetes sysctl parameters
+      copy:
+        dest: /etc/sysctl.d/99-kubernetes-cri.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+        mode: "0644"
+
+    - name: Apply sysctl parameters
+      command: sysctl --system
+      register: sysctl_result
+      changed_when: "'Applying /etc/sysctl.d/99-kubernetes-cri.conf' in sysctl_result.stdout"
+
+    - name: Disable swap at runtime
+      command: swapoff -a
+      when: ansible_swaptotal_mb | int > 0
+
+    - name: Ensure swap entries are commented in /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^(\s*[^#\s]+\s+[^#\s]+\s+swap\s+.*)$'
+        replace: '# \1'
+
+    - name: Ensure keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Locate docker repository files on host
+      ansible.builtin.find:
+        paths: /etc/apt/sources.list.d
+        patterns: "docker*.list"
+        file_type: file
+      register: docker_repo_files
+      failed_when: false
+
+    - name: Remove docker repository definitions
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ docker_repo_files.files | default([]) }}"
+      when: docker_repo_files is defined and (docker_repo_files.files | length > 0)
+      failed_when: false
+
+    - name: Remove docker repo via apt_repository if it exists
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_facts.distribution_release }} stable"
+        state: absent
+        filename: docker
+      failed_when: false
+      changed_when: false
+
+    - name: Remove legacy Docker keyring file (if present)
+      file:
+        path: /etc/apt/keyrings/docker.asc
+        state: absent
+      failed_when: false
+      changed_when: false
+
+    - name: Purge old Docker entries from /etc/apt/sources.list
+      lineinfile:
+        path: /etc/apt/sources.list
+        regexp: '^deb\s+.*download.docker.com/'
+        state: absent
+      register: remove_docker_sources
+      failed_when: false
+      changed_when: remove_docker_sources.changed | default(false)
+
+    - name: Install base packages for Docker/Kubernetes
+      apt:
+        name: "{{ base_packages }}"
+        state: present
+        update_cache: yes
+
+    - name: Download and convert Docker apt key
+      shell: |
+        set -euo pipefail
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o {{ docker_gpg_dest }}
+        chmod 0644 {{ docker_gpg_dest }}
+      args:
+        creates: "{{ docker_gpg_dest }}"
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "{{ docker_apt_repo }}"
+        filename: docker
+        state: present
+
+    - name: Install Docker packages
+      apt:
+        name: "{{ docker_packages }}"
+        state: present
+        update_cache: yes
+
+    - name: Generate default containerd config if missing
+      command: bash -c "containerd config default > /etc/containerd/config.toml"
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Ensure containerd uses systemd cgroups
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+
+    - name: Configure Docker daemon defaults
+      copy:
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "100m"
+            },
+            "storage-driver": "overlay2",
+            "insecure-registries": ["{{ registry_endpoint }}"]
+          }
+
+    - name: Download Kubernetes apt key
+      get_url:
+        url: "{{ k8s_repo_key_url }}"
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        mode: "0644"
+
+    - name: Add Kubernetes apt repository
+      apt_repository:
+        repo: "{{ k8s_repo }}"
+        filename: kubernetes
+        state: present
+
+    - name: Install Kubernetes packages
+      apt:
+        name: "{{ k8s_packages }}"
+        state: present
+        update_cache: yes
+
+    - name: Hold Kubernetes packages at current version
+      command: apt-mark hold kubelet kubeadm kubectl
+      changed_when: false
+
+    - name: Configure kubelet with node IP
+      copy:
+        dest: /etc/default/kubelet
+        mode: "0644"
+        content: |
+          KUBELET_EXTRA_ARGS=--node-ip={{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}
+
+    - name: Enable and restart containerd
+      systemd:
+        name: containerd
+        enabled: true
+        state: restarted
+
+    - name: Enable and restart Docker
+      systemd:
+        name: docker
+        enabled: true
+        state: restarted
+
+    - name: Enable kubelet service (will stay Pending until kubeadm joins)
+      systemd:
+        name: kubelet
+        enabled: true
+        state: started

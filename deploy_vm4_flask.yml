@@ -1,0 +1,100 @@
+---
+- name: Deploy Flask webserver on team2_vm4
+  hosts: team2_vm4
+  become: true
+  gather_facts: yes
+
+  vars:
+    app_dir: /opt/app
+    venv_path: /opt/pyenv
+    flask_host: "0.0.0.0"
+    flask_port: 5000
+    flask_src: "{{ playbook_dir }}/flask_server.py"
+
+  pre_tasks:
+    - name: Ensure base packages present (python3, venv, pip)
+      apt:
+        name:
+          - python3
+          - python3-venv
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    - name: Create venv if missing
+      command: "python3 -m venv {{ venv_path }}"
+      args: { creates: "{{ venv_path }}/bin/activate" }
+
+    - name: Ensure app directory exists
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: cc
+        group: cc
+        mode: "0755"
+
+    - name: Ensure Python deps for Flask are present (incl. pymongo)
+      pip:
+        name:
+          - Flask
+          - requests
+          - pymongo
+        executable: "{{ venv_path }}/bin/pip"
+        state: present
+
+  tasks:
+    - name: Install flask_server.py on vm4 (from repo)
+      copy:
+        src: "{{ flask_src }}"
+        dest: "{{ app_dir }}/flask_server.py"
+        owner: cc
+        group: cc
+        mode: "0644"
+      notify: restart flask
+
+    # Don't overwrite your existing env file if it already includes the correct MONGO_URI
+    - name: Ensure environment file exists for Flask (no overwrite)
+      copy:
+        dest: /etc/default/flask-app
+        mode: "0644"
+        content: |
+          FLASK_HOST={{ flask_host }}
+          FLASK_PORT={{ flask_port }}
+        force: no
+
+    - name: Create systemd unit for Flask
+      copy:
+        dest: /etc/systemd/system/flask-app.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Flask web server (utilizations)
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          EnvironmentFile=/etc/default/flask-app
+          WorkingDirectory={{ app_dir }}
+          ExecStart={{ venv_path }}/bin/python {{ app_dir }}/flask_server.py
+          Restart=always
+          RestartSec=2
+          User=cc
+          Group=cc
+          Environment=PYTHONUNBUFFERED=1
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - daemon-reload
+        - restart flask
+
+  handlers:
+    - name: daemon-reload
+      systemd:
+        daemon_reload: true
+    - name: restart flask
+      systemd:
+        name: flask-app
+        enabled: true
+        state: restarted

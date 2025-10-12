@@ -1,0 +1,132 @@
+---
+- name: Deploy Kafka consumer on team2_vm3
+  hosts: team2_vm3
+  become: true
+  gather_facts: yes
+
+  vars:
+    consumer_src: "{{ playbook_dir }}/consumer.py"
+
+    app_dir: /opt/app
+    venv_path: /opt/pyenv
+
+    broker_vm2: "team2_vm2"
+    flask_vm:   "team2_vm4"
+
+    # Use ONLY vm2 (the actual broker) — do not include dead brokers or 127.0.0.1
+    kafka_bootstrap: "{{ hostvars[broker_vm2].private_ip }}:9092"
+    kafka_topic: "utilizations"
+    flask_url: "http://{{ hostvars[flask_vm].private_ip }}:5000/update_data"
+    post_timeout: "5"
+    kafka_group_id: "vm3-consumer"
+
+  pre_tasks:
+    - name: Sanity — show resolved endpoints
+      debug:
+        msg:
+          - "Kafka bootstrap: {{ kafka_bootstrap }}"
+          - "Flask URL: {{ flask_url }}"
+
+    - name: Ensure base packages present (python3, venv, pip)
+      apt:
+        name:
+          - python3
+          - python3-venv
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    - name: Create venv if missing
+      command: "python3 -m venv {{ venv_path }}"
+      args: { creates: "{{ venv_path }}/bin/activate" }
+
+    - name: Ensure app directory exists
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: cc
+        group: cc
+        mode: "0755"
+
+    - name: Ensure Python deps for consumer are present
+      pip:
+        name:
+          - kafka-python
+          - requests
+        executable: "{{ venv_path }}/bin/pip"
+        state: present
+
+  tasks:
+    - name: Copy consumer.py from control node to team2_vm3
+      copy:
+        src: "{{ consumer_src }}"
+        dest: "{{ app_dir }}/consumer.py"
+        owner: cc
+        group: cc
+        mode: "0644"
+
+    - name: Create environment file for consumer
+      copy:
+        dest: /etc/default/kafka-consumer
+        mode: "0644"
+        content: |
+          KAFKA_BOOTSTRAP={{ kafka_bootstrap }}
+          KAFKA_TOPIC={{ kafka_topic }}
+          FLASK_URL={{ flask_url }}
+          POST_TIMEOUT={{ post_timeout }}
+          KAFKA_GROUP_ID={{ kafka_group_id }}
+
+    - name: Create systemd unit for Kafka consumer
+      copy:
+        dest: /etc/systemd/system/kafka-consumer.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Kafka consumer -> Flask forwarder
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          EnvironmentFile=/etc/default/kafka-consumer
+          WorkingDirectory={{ app_dir }}
+          ExecStart={{ venv_path }}/bin/python {{ app_dir }}/consumer.py
+          Restart=always
+          RestartSec=2
+          StandardOutput=journal
+          StandardError=journal
+          User=cc
+          Group=cc
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+
+    - name: Enable & start Kafka consumer
+      systemd:
+        name: kafka-consumer
+        enabled: true
+        state: started
+
+    - name: Show consumer status
+      command: systemctl status kafka-consumer --no-pager
+      register: consumer_status
+      changed_when: false
+      failed_when: false
+
+    - name: Print consumer status
+      debug:
+        var: consumer_status.stdout
+
+    - name: Tail last 60 lines of consumer logs
+      command: journalctl -u kafka-consumer -n 60 --no-pager
+      register: consumer_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Print consumer logs
+      debug:
+        var: consumer_logs.stdout

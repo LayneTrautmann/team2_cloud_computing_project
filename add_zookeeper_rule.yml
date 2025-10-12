@@ -1,0 +1,63 @@
+---
+- name: Allow ZooKeeper port 2181 for VM1 (create SG + attach)
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  collections:
+    - openstack.cloud
+
+  vars:
+    cloud_name: "{{ lookup('env','OS_CLOUD') | default('CH-822922') }}"          # must match your clouds.yaml entry
+    zk_sg_name: "ENABLE_ZOOKEEPER"   # new Security Group we'll create
+    private_cidr: "192.168.5.0/24"   # your project subnet
+    vm1_name: "team2_vm1"
+
+  tasks:
+    # 0) Ensure OpenStack CLI is available in this venv (safe if already installed)
+    - name: Install OpenStack CLI in venv (idempotent)
+      ansible.builtin.pip:
+        name: python-openstackclient
+      register: cli_install
+
+    # 1) Create SG if missing
+    - name: Ensure security group exists
+      openstack.cloud.security_group:
+        cloud: "{{ cloud_name }}"
+        state: present
+        name: "{{ zk_sg_name }}"
+        description: "Allow TCP/2181 (ZooKeeper) from project subnet"
+
+    # 2) Add rule TCP/2181 from project subnet (idempotent)
+    - name: Ensure ingress rule for TCP/2181
+      openstack.cloud.security_group_rule:
+        cloud: "{{ cloud_name }}"
+        security_group: "{{ zk_sg_name }}"
+        protocol: tcp
+        port_range_min: 2181
+        port_range_max: 2181
+        remote_ip_prefix: "{{ private_cidr }}"
+        direction: ingress
+        ethertype: IPv4
+        state: present
+
+    # 3) Attach the SG to VM1 using the OpenStack CLI (keeps us fully automated)
+    - name: Attach SG to VM1 using OpenStack CLI (idempotent-ish)
+      ansible.builtin.command:
+        cmd: >
+          openstack server add security group {{ vm1_name }} {{ zk_sg_name }}
+      register: attach_result
+      # Treat "already exists" as no-change; any other nonzero rc would still fail
+      failed_when: attach_result.rc not in [0]
+      changed_when: "'already' not in (attach_result.stderr | default('')) and 'already' not in (attach_result.stdout | default(''))"
+
+    # 4) Show final SGs on VM1 (nice to confirm)
+    - name: Show VM1 security groups
+      ansible.builtin.command:
+        cmd: >
+          openstack server show {{ vm1_name }} -f json
+      register: vm1_show
+      changed_when: false
+
+    - name: Print VM1 security groups
+      ansible.builtin.debug:
+        msg: "{{ (vm1_show.stdout | from_json).security_groups }}"

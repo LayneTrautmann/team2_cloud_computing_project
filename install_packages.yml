@@ -1,0 +1,55 @@
+---
+- name: Install OS packages and a Python venv (looped)
+  hosts: kafka_cluster
+  become: true
+  gather_facts: yes
+
+  vars:
+    apt_packages:
+      - python3
+      - python3-venv
+      - python3-pip
+      - openjdk-17-jre-headless
+      - tar
+      - wget
+      - unzip
+      - firewalld
+      - jq
+      - git
+      - curl
+
+    venv_path: /opt/pyenv
+    pip_packages:
+      - kafka-python
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required apt packages
+      apt:
+        name: "{{ apt_packages }}"
+        state: present
+
+    - name: Create venv directory
+      file:
+        path: "{{ venv_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create Python virtual environment (system python)
+      command: "python3 -m venv {{ venv_path }}"
+      args:
+        creates: "{{ venv_path }}/bin/activate"
+
+    - name: Upgrade pip inside venv
+      command: "{{ venv_path }}/bin/pip install --upgrade pip"
+
+    - name: Install Python packages inside venv (loop)
+      pip:
+        name: "{{ item }}"
+        executable: "{{ venv_path }}/bin/pip"
+        state: present
+      loop: "{{ pip_packages }}"

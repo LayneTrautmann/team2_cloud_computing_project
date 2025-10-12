@@ -1,0 +1,281 @@
+---
+- name: Create 5 VMs and set up port-forwarded SSH access via bastion
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    # ---- Bastion (public, provided by site) ----
+    bastion_user: "cc"
+    bastion_ip: "129.114.25.255"
+    bastion_key: "{{ lookup('env','HOME') }}/.ssh/F25_BASTION.pem"
+
+    # ---- Cloud params (Chameleon/OpenStack) ----
+    cloud_name: "{{ lookup('env','OS_CLOUD') | default('CH-822922') }}"
+    image_name: "CC-Ubuntu24.04"
+    key_name: "team2_key"
+    network_name: "CH-822922-net"
+    security_groups:
+      - ENABLE_ICMP
+      - ENABLE_SSH
+      - ENABLE_CUSTOM_SERVICE
+      - ENABLE_DB
+      - ENABLE_KAFKA
+    assign_floating_ip: false
+
+    # ---- VM definitions ----
+    servers:
+      - { name: "team2_vm1", flavor: "reservation:dd472e19-5e43-4e90-8d8d-107520b3a923", groups: ["kafka_broker","zookeeper"] }
+      - { name: "team2_vm2", flavor: "reservation:97738dba-7dcf-40d3-8618-a78703b1ddfc", groups: ["kafka_broker"] }
+      - { name: "team2_vm3", flavor: "reservation:97738dba-7dcf-40d3-8618-a78703b1ddfc", groups: ["workers"] }
+      - { name: "team2_vm4", flavor: "reservation:97738dba-7dcf-40d3-8618-a78703b1ddfc", groups: ["workers"] }
+      - { name: "team2_vm5", flavor: "reservation:97738dba-7dcf-40d3-8618-a78703b1ddfc", groups: ["workers"] }
+
+    # ---- Local forwarding ports: 2201..2205 ----
+    base_port: 2201
+
+    # ---- Output paths (on your control node/WSL home) ----
+    project_dir: "{{ lookup('env','HOME') }}/ansible_project"
+    out_inventory: "{{ project_dir }}/hosts"
+    start_script: "{{ project_dir }}/start_tunnels.sh"
+    stop_script:  "{{ project_dir }}/stop_tunnels.sh"
+
+  tasks:
+    - name: Ensure project dir exists
+      ansible.builtin.file:
+        path: "{{ project_dir }}"
+        state: directory
+        mode: "0755"
+
+    # --- Discover the tenant IPv4 CIDR for the given network (no hardcoding) ---
+    - name: Lookup network info (plural module)
+      openstack.cloud.networks_info:
+        cloud: "{{ cloud_name }}"
+        name: "{{ network_name }}"
+      register: netinfo
+      tags: sg_rules
+
+    - name: Fail if network not found
+      ansible.builtin.fail:
+        msg: "Network {{ network_name }} not found"
+      when: netinfo.networks | length == 0
+      tags: sg_rules
+
+    - name: Get IPv4 subnets on the network
+      openstack.cloud.subnets_info:
+        cloud: "{{ cloud_name }}"
+        filters:
+          network_id: "{{ netinfo.networks[0]['id'] }}"
+          ip_version: 4
+      register: subinfo
+      tags: sg_rules
+
+    - name: Fail if no IPv4 subnet found
+      ansible.builtin.fail:
+        msg: "No IPv4 subnet found for network {{ network_name }}"
+      when: subinfo.subnets | length == 0
+      tags: sg_rules
+
+    - name: Set tenant_cidr fact
+      ansible.builtin.set_fact:
+        tenant_cidr: "{{ subinfo.subnets[0]['cidr'] }}"
+      tags: sg_rules
+      
+    - name: Ensure SG rule for MongoDB in ENABLE_DB
+      openstack.cloud.security_group_rule:
+        cloud: "{{ cloud_name }}"
+        security_group: "ENABLE_DB"
+        protocol: tcp
+        port_range_min: 27017
+        port_range_max: 27017
+        remote_ip_prefix: "{{ tenant_cidr }}"
+        direction: ingress
+        ether_type: IPv4
+
+
+    - name: Show tenant CIDR (debug)
+      ansible.builtin.debug:
+        msg: "Tenant CIDR detected: {{ tenant_cidr }}"
+
+    # --- Create/ensure servers ---
+    - name: Ensure servers exist
+      openstack.cloud.server:
+        cloud: "{{ cloud_name }}"
+        state: present
+        name: "{{ item.name }}"
+        image: "{{ image_name }}"
+        flavor: "{{ item.flavor }}"
+        network: "{{ network_name }}"
+        key_name: "{{ key_name }}"
+        security_groups: "{{ security_groups }}"
+        auto_ip: "{{ assign_floating_ip }}"
+        wait: true
+        timeout: 900
+      loop: "{{ servers }}"
+      register: created
+
+    - name: Fail if any server not ACTIVE
+      ansible.builtin.fail:
+        msg: "Server {{ item.server.name }} ended in status {{ item.server.status }}"
+      loop: "{{ created.results }}"
+      when: item.server.status != 'ACTIVE'
+
+    # --- Build mapping name -> private IPv4 + local SSH forward port ---
+    - name: Build mapping (name -> private IPv4 + local port)
+      ansible.builtin.set_fact:
+        vm_map: >-
+          {{
+            vm_map | default({}) | combine(
+              {
+                item.server.name: {
+                  'ip': (
+                    (item.server.addresses
+                      | dict2items
+                      | map(attribute='value') | list
+                      | sum(start=[]))
+                    | selectattr('version','equalto',4)
+                    | map(attribute='addr') | first
+                  ),
+                  'lport': base_port + idx
+                }
+              }, recursive=True)
+          }}
+      loop: "{{ created.results }}"
+      loop_control:
+        index_var: idx
+
+    - name: Show resulting mapping (debug)
+      ansible.builtin.debug:
+        var: vm_map
+
+    # --- Ensure security-group rules allow ZK/Kafka + EXTERNAL broker ports within tenant ---
+    - name: Ensure SG rules for ZooKeeper/Kafka in ENABLE_KAFKA
+      openstack.cloud.security_group_rule:
+        cloud: "{{ cloud_name }}"
+        security_group: "ENABLE_KAFKA"
+        protocol: tcp
+        port_range_min: "{{ item }}"
+        port_range_max: "{{ item }}"
+        remote_ip_prefix: "{{ tenant_cidr }}"
+        direction: ingress
+        ether_type: IPv4
+      tags: sg_rules
+      loop:
+        - 2181     # ZooKeeper
+        - 9092     # Kafka INTERNAL
+        - 6443     # Kubernetes API server
+        - 29091    # Kafka EXTERNAL (vm1)
+        - 29092    # Kafka EXTERNAL (vm2)
+
+    - name: (Optional) Mirror rules into ENABLE_CUSTOM_SERVICE (if SG exists)
+      openstack.cloud.security_group_rule:
+        cloud: "{{ cloud_name }}"
+        security_group: "ENABLE_CUSTOM_SERVICE"
+        protocol: tcp
+        port_range_min: "{{ item }}"
+        port_range_max: "{{ item }}"
+        remote_ip_prefix: "{{ tenant_cidr }}"
+        direction: ingress
+        ether_type: IPv4
+      loop:
+        - 2181
+        - 9092
+        - 6443
+        - 29091
+        - 29092
+      ignore_errors: yes
+      tags: sg_rules
+
+    # --- Write inventory with current private IPs and local tunnel ports ---
+    - name: Write inventory (localhost tunnels + private_ip for reference)
+      ansible.builtin.copy:
+        dest: "{{ out_inventory }}"
+        mode: "0644"
+        content: |
+          # Generated by create_vms.yml
+          [bastion]
+          bastion1 ansible_host={{ bastion_ip }} ansible_user={{ bastion_user }} ansible_ssh_private_key_file={{ bastion_key }}
+
+          [kafka_cluster]
+          {% for name, info in vm_map | dictsort %}
+          {{ name }} ansible_host=127.0.0.1 ansible_port={{ info.lport }} private_ip={{ info.ip }}
+          {% endfor %}
+
+          [kafka_broker]
+          team2_vm1
+          team2_vm2
+
+          [zookeeper]
+          team2_vm1
+
+          [workers]
+          team2_vm3
+          team2_vm4
+          team2_vm5
+
+          [kafka_cluster:vars]
+          ansible_user=cc
+          ansible_ssh_private_key_file={{ lookup('env','HOME') }}/.ssh/team2_key.pem
+          ansible_ssh_common_args="-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+
+    # --- Render start/stop tunnel helpers using the latest vm_map ---
+    - name: Render start_tunnels.sh (robust checks; uses latest vm_map)
+      ansible.builtin.copy:
+        dest: "{{ start_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          BASTION="{{ bastion_user }}@{{ bastion_ip }}"
+          BKEY="{{ lookup('env','HOME') }}/.ssh/F25_BASTION.pem"
+
+          MAP=(
+          {% for name, meta in vm_map | dictsort %}
+            "{{ meta.lport }}:{{ meta.ip }}:22"  # {{ name }}
+          {% endfor %}
+          )
+
+          busy=0
+          for spec in "${MAP[@]}"; do
+            lport="${spec%%:*}"
+            if ss -ltn sport = :"$lport" | grep -q LISTEN; then
+              echo "Port $lport already in use. Run ./stop_tunnels.sh first." >&2
+              busy=1
+            fi
+          done
+          if [[ "$busy" -ne 0 ]]; then exit 1; fi
+
+          FORWARDS=""
+          for spec in "${MAP[@]}"; do
+            FORWARDS+=" -L ${spec}"
+          done
+
+          echo "Starting tunnels via $BASTION:"
+          for spec in "${MAP[@]}"; do echo "  localhost:${spec}"; done
+
+          exec ssh -i "$BKEY" -fN \
+            -o ExitOnForwardFailure=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            $FORWARDS "$BASTION"
+
+    - name: Render stop_tunnels.sh (kill listeners and the ssh -N)
+      ansible.builtin.copy:
+        dest: "{{ stop_script }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          for p in {% for name, meta in vm_map | dictsort %}{{ meta.lport }} {% endfor %}; do
+            if command -v lsof >/dev/null 2>&1; then
+              lsof -tiTCP:$p -sTCP:LISTEN | xargs -r kill || true
+            else
+              fuser -k 127.0.0.1:$p/tcp || true
+            fi
+          done
+
+          pkill -f 'ssh.*-N.*{{ bastion_ip | replace(".","\\.") }}' || true
+
+          echo "Stopped tunnels and freed ports {% for name, meta in vm_map | dictsort %}{{ meta.lport }}{% if not loop.last %},{% endif %}{% endfor %}."

@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ flask_deployment_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app: flask
+spec:
+  replicas: {{ flask_replicas }}
+  selector:
+    matchLabels:
+      app: flask
+  template:
+    metadata:
+      labels:
+        app: flask
+    spec:
+      containers:
+        - name: flask
+          image: {{ registry }}/flask:{{ image_tag }}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+          env:
+            - name: FLASK_HOST
+              value: "0.0.0.0"
+            - name: FLASK_PORT
+              value: "{{ flask_container_port }}"
+            - name: MONGO_URI
+              value: "{{ mongo_uri }}"
+            - name: MONGO_DB
+              value: "{{ mongo_db }}"

@@ -1,0 +1,14 @@
+# Virtual environments / Python caches
+.venv/
+__pycache__/
+*.pyc
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+
+# Local scratch space (safe to create for experiments)
+scratch/
+
+# Ansible temporary dirs
+.ansible/

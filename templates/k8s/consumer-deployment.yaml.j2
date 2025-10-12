@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ consumer_deployment_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app: consumer
+spec:
+  replicas: {{ consumer_replicas }}
+  selector:
+    matchLabels:
+      app: consumer
+  template:
+    metadata:
+      labels:
+        app: consumer
+    spec:
+      containers:
+        - name: consumer
+          image: {{ registry }}/consumer:{{ image_tag }}
+          imagePullPolicy: Always
+          env:
+            - name: KAFKA_BOOTSTRAP
+              value: "{{ kafka_bootstrap }}"
+            - name: KAFKA_TOPICS
+              value: "{{ consumer_topics | join(',') }}"
+            - name: FLASK_URL
+              value: "{{ flask_service_internal_url }}"
+            - name: POST_TIMEOUT
+              value: "{{ consumer_post_timeout }}"
+            - name: POST_BACKOFF_SEC
+              value: "{{ consumer_post_backoff }}"
+            - name: KAFKA_GROUP_ID
+              value: "{{ consumer_group_id }}"

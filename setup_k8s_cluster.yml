@@ -1,0 +1,103 @@
+---
+# Initialize the Kubernetes control plane on vm1
+- name: Initialize Kubernetes control plane
+  hosts: "{{ groups['kafka_broker'][0] }}"
+  become: true
+  gather_facts: yes
+
+  vars:
+    pod_network_cidr: 10.244.0.0/16
+    k8s_user: cc
+    kubeconfig_dest: "/home/{{ k8s_user }}/.kube/config"
+    registry_port: 5000
+    master_ip: "{{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}"
+    flannel_manifest_src: k8s/kube-flannel.yml
+    flannel_manifest_dest: /tmp/kube-flannel.yml
+
+  tasks:
+    - name: Check if control plane already initialized
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf
+
+    - name: Initialize the Kubernetes control plane (kubeadm init)
+      command: >
+        kubeadm init
+        --apiserver-advertise-address={{ master_ip }}
+        --apiserver-cert-extra-sans={{ master_ip }}
+        --control-plane-endpoint={{ master_ip }}
+        --pod-network-cidr={{ pod_network_cidr }}
+        --node-name {{ inventory_hostname | replace('_', '-') }}
+        --cri-socket unix:///run/containerd/containerd.sock
+        --upload-certs
+      when: not admin_conf.stat.exists
+
+    - name: Ensure {{ k8s_user }} kube config directory exists
+      file:
+        path: "/home/{{ k8s_user }}/.kube"
+        state: directory
+        owner: "{{ k8s_user }}"
+        group: "{{ k8s_user }}"
+        mode: "0700"
+
+    - name: Copy admin kubeconfig to {{ k8s_user }}
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ kubeconfig_dest }}"
+        mode: "0600"
+        owner: "{{ k8s_user }}"
+        group: "{{ k8s_user }}"
+        remote_src: true
+
+    - name: Retrieve kubeadm join command
+      command: kubeadm token create --print-join-command --ttl 1h
+      register: join_command_raw
+      changed_when: false
+
+    - name: Persist kubeadm join command fact
+      set_fact:
+        kubeadm_join_command: "{{ join_command_raw.stdout }} --cri-socket unix:///run/containerd/containerd.sock"
+
+    - name: Display join command for reference
+      debug:
+        msg: "{{ kubeadm_join_command }}"
+
+    - name: Copy Flannel CNI manifest to control plane
+      copy:
+        src: "{{ flannel_manifest_src }}"
+        dest: "{{ flannel_manifest_dest }}"
+        mode: "0644"
+
+    - name: Install Flannel CNI (idempotent apply)
+      command: kubectl apply -f {{ flannel_manifest_dest }} --kubeconfig /etc/kubernetes/admin.conf
+
+    - name: Allow scheduling on the control plane node
+      command: kubectl taint nodes {{ inventory_hostname }} node-role.kubernetes.io/control-plane- --kubeconfig /etc/kubernetes/admin.conf
+      register: taint_result
+      failed_when: taint_result.rc not in [0, 1]
+      changed_when: taint_result.rc == 0
+
+# Join the remaining nodes (including vm1 if re-tainted) to the cluster
+- name: Join worker nodes to the cluster
+  hosts: "{{ groups['kafka_cluster'] | difference([groups['kafka_broker'][0]]) }}"
+  become: true
+  gather_facts: yes
+
+  vars:
+    k8s_master_host: "{{ groups['kafka_broker'][0] }}"
+
+  tasks:
+    - name: Check if kubelet already has Kubernetes config
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Join node to cluster
+      command: "{{ hostvars[k8s_master_host].kubeadm_join_command }} --node-name {{ inventory_hostname | replace('_','-') }}"
+      when: not kubelet_conf.stat.exists
+
+    - name: Ensure kubelet service is running
+      systemd:
+        name: kubelet
+        state: started
+        enabled: true

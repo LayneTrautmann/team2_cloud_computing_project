@@ -1,0 +1,354 @@
+---
+# 1) Gather facts from the Zookeeper host so we can reference its private IP
+- name: Warm facts for zookeeper host
+  hosts: zookeeper
+  gather_facts: yes
+  tasks:
+    - name: Show Zookeeper host private IP
+      debug:
+        msg: "Zookeeper host {{ inventory_hostname }} private IP is {{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}"
+
+# 2) Install & configure Kafka on brokers (team2_vm1, team2_vm2) - DO NOT START YET
+- name: Install & configure Kafka on brokers
+  hosts: kafka_broker
+  become: true
+  gather_facts: yes
+
+  vars:
+    # Kafka version (Kafka 3.7.0 + Scala 2.13)
+    kafka_version: "3.7.0"
+    scala_version: "2.13"
+    kafka_tgz: "kafka_{{ scala_version }}-{{ kafka_version }}.tgz"
+    kafka_url: "https://archive.apache.org/dist/kafka/{{ kafka_version }}/{{ kafka_tgz }}"
+
+    # Control-node artifact location (download once, copy to VMs)
+    artifact_dir: "{{ lookup('env','HOME') }}/ansible_project/artifacts"
+    artifact_path: "{{ artifact_dir }}/{{ kafka_tgz }}"
+
+    # Destination & config paths on brokers
+    kafka_root: "/opt"
+    kafka_dir: "{{ kafka_root }}/kafka_{{ scala_version }}-{{ kafka_version }}"
+    kafka_user: "kafka"
+    kafka_group: "kafka"
+    kafka_data_dir: "/var/lib/kafka/data"
+    kafka_port: 9092
+
+    # Zookeeper connection (use inventory private_ip first, fallback to detected IP)
+    zk_host: "{{ groups['zookeeper'][0] }}"
+    zookeeper_private_ip: "{{ hostvars[zk_host].private_ip | default(hostvars[zk_host].ansible_default_ipv4.address) }}"
+    zookeeper_connect: "{{ zookeeper_private_ip }}:2181"
+
+    # Broker settings:
+    # take the LAST number in hostname: team2_vm1->1, team2_vm2->2, etc.
+    broker_id: "{{ (inventory_hostname | regex_findall('\\d+') | last | int) }}"
+    advertised_host: "{{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}"
+    external_port: "{{ 29090 + broker_id }}"       # <<< ADDED (per-broker external port, e.g., 29091/29092)
+
+  handlers:
+    - name: daemon-reload
+      ansible.builtin.systemd:
+        daemon_reload: true
+    - name: restart kafka
+      ansible.builtin.systemd:
+        name: kafka
+        state: restarted
+
+  pre_tasks:
+    - name: Ensure artifacts dir exists (control node)
+      delegate_to: localhost
+      run_once: true
+      become: false
+      file:
+        path: "{{ artifact_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download Kafka tarball (control node, cached)
+      delegate_to: localhost
+      run_once: true
+      become: false
+      shell: |
+        set -euo pipefail
+        if [ ! -s "{{ artifact_path }}" ]; then
+          curl -L --fail --show-error \
+            --connect-timeout 10 --max-time 600 \
+            --retry 3 --retry-delay 5 \
+            -o "{{ artifact_path }}" "{{ kafka_url }}"
+        fi
+      args:
+        executable: /bin/bash
+
+  tasks:
+    - name: Ensure kafka group exists
+      ansible.builtin.group:
+        name: "{{ kafka_group }}"
+        system: true
+
+    - name: Ensure kafka user exists
+      ansible.builtin.user:
+        name: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        shell: /usr/sbin/nologin
+        system: true
+        create_home: false
+
+    - name: Ensure firewalld is enabled and running
+      ansible.builtin.service:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Open broker port {{ kafka_port }}/tcp
+      ansible.posix.firewalld:
+        port: "{{ kafka_port }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Open broker EXTERNAL port {{ external_port }}/tcp   # <<< ADDED
+      ansible.posix.firewalld:
+        port: "{{ external_port }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Create Kafka data dir {{ kafka_data_dir }}
+      ansible.builtin.file:
+        path: "{{ kafka_data_dir }}"
+        state: directory
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        mode: "0755"
+        recurse: true
+
+    - name: Copy Kafka tarball from control node to broker
+      copy:
+        src: "{{ artifact_path }}"
+        dest: "/tmp/{{ kafka_tgz }}"
+        mode: "0644"
+
+    - name: Unpack Kafka to {{ kafka_root }}
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ kafka_tgz }}"
+        dest: "{{ kafka_root }}"
+        remote_src: true
+        creates: "{{ kafka_dir }}"
+
+    - name: Own the Kafka directory recursively
+      ansible.builtin.file:
+        path: "{{ kafka_dir }}"
+        state: directory
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        recurse: true
+
+    - name: Write server.properties (uses {{ kafka_dir }})
+      ansible.builtin.copy:
+        dest: "{{ kafka_dir }}/config/server.properties"
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        mode: "0644"
+        content: |
+          broker.id={{ broker_id }}
+
+          # Two listeners: INTERNAL for inter-broker; EXTERNAL for laptops via SSH -L
+          listeners=INTERNAL://0.0.0.0:{{ kafka_port }},EXTERNAL://0.0.0.0:{{ external_port }}
+          advertised.listeners=INTERNAL://{{ advertised_host }}:{{ kafka_port }},EXTERNAL://127.0.0.1:{{ external_port }}
+          listener.security.protocol.map=INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+          inter.broker.listener.name=INTERNAL
+
+          log.dirs={{ kafka_data_dir }}
+          ...
+
+          num.partitions=1
+          num.network.threads=3
+          num.io.threads=8
+          socket.send.buffer.bytes=102400
+          socket.receive.buffer.bytes=102400
+          socket.request.max.bytes=104857600
+
+          offsets.topic.replication.factor=1
+          transaction.state.log.replication.factor=1
+          transaction.state.log.min.isr=1
+          group.initial.rebalance.delay.ms=0
+          auto.create.topics.enable=true
+          delete.topic.enable=true
+
+          zookeeper.connect={{ zookeeper_connect }}
+          zookeeper.connection.timeout.ms=45000
+      notify: restart kafka
+
+    # --- Guard: if node.id stored in meta.properties != broker_id, wipe data dir (safe when brokers are empty) ---
+    - name: Read stored node.id (if any)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        FILE="{{ kafka_data_dir }}/meta.properties"
+        if [ -f "$FILE" ]; then
+          awk -F= '/^node.id=/{print $2}' "$FILE"
+        fi
+      args:
+        executable: /bin/bash
+      register: stored_node_id
+      changed_when: false
+      failed_when: false
+
+    - name: Wipe data dir if stored node.id mismatches intended broker.id
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl stop kafka || true
+        rm -rf {{ kafka_data_dir }}/*
+      args:
+        executable: /bin/bash
+      when:
+        - stored_node_id.stdout is defined
+        - stored_node_id.stdout | trim != ''
+        - (stored_node_id.stdout | trim | int) != broker_id
+
+    - name: Install systemd unit for Kafka (uses {{ kafka_dir }})
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/kafka.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Apache Kafka Broker
+          After=network.target
+          Wants=network.target
+
+          [Service]
+          Type=simple
+          User={{ kafka_user }}
+          Group={{ kafka_group }}
+          Environment=KAFKA_HOME={{ kafka_dir }}
+          ExecStart={{ kafka_dir }}/bin/kafka-server-start.sh {{ kafka_dir }}/config/server.properties
+          ExecStop={{ kafka_dir }}/bin/kafka-server-stop.sh
+          Restart=on-failure
+          SuccessExitStatus=143
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: daemon-reload
+
+    - name: Enable Kafka service (do not start yet)
+      ansible.builtin.systemd:
+        name: kafka
+        enabled: true
+        state: stopped
+
+# 3) Configure & start Zookeeper on vm1
+- name: Configure & start Zookeeper (vm1)
+  hosts: zookeeper
+  become: true
+  gather_facts: yes
+
+  vars:
+    kafka_version: "3.7.0"
+    scala_version: "2.13"
+    kafka_dir: "/opt/kafka_{{ scala_version }}-{{ kafka_version }}"
+    kafka_user: "kafka"
+    kafka_group: "kafka"
+    zk_data_dir: "/var/lib/zookeeper"
+    zk_port: 2181
+
+  handlers:
+    - name: daemon-reload
+      ansible.builtin.systemd:
+        daemon_reload: true
+    - name: restart zookeeper
+      ansible.builtin.systemd:
+        name: zookeeper
+        state: restarted
+
+  tasks:
+    - name: Ensure firewalld is enabled and running
+      ansible.builtin.service:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Open Zookeeper port {{ zk_port }}/tcp
+      ansible.posix.firewalld:
+        port: "{{ zk_port }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Create Zookeeper data dir {{ zk_data_dir }}
+      ansible.builtin.file:
+        path: "{{ zk_data_dir }}"
+        state: directory
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        mode: "0755"
+
+    - name: Write zookeeper.properties (standalone)
+      ansible.builtin.copy:
+        dest: "{{ kafka_dir }}/config/zookeeper.properties"
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        mode: "0644"
+        content: |
+          tickTime=2000
+          dataDir={{ zk_data_dir }}
+          clientPort={{ zk_port }}
+          initLimit=5
+          syncLimit=2
+      notify: restart zookeeper
+
+    - name: Install systemd unit for Zookeeper (uses {{ kafka_dir }})
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/zookeeper.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Apache Zookeeper (Kafka-bundled)
+          After=network.target
+          Wants=network.target
+
+          [Service]
+          Type=simple
+          User={{ kafka_user }}
+          Group={{ kafka_group }}
+          Environment=KAFKA_HOME={{ kafka_dir }}
+          ExecStart={{ kafka_dir }}/bin/zookeeper-server-start.sh {{ kafka_dir }}/config/zookeeper.properties
+          ExecStop={{ kafka_dir }}/bin/zookeeper-server-stop.sh
+          Restart=on-failure
+          SuccessExitStatus=143
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: daemon-reload
+
+    - name: Enable & start Zookeeper
+      ansible.builtin.systemd:
+        name: zookeeper
+        enabled: true
+        state: started
+
+    - name: Wait until ZooKeeper is reachable on {{ zk_port }}
+      ansible.builtin.wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: "{{ zk_port }}"
+        timeout: 60
+
+# 4) Start Kafka brokers after ZK is up
+- name: Start Kafka brokers (after ZK up)
+  hosts: kafka_broker
+  become: true
+  gather_facts: yes
+  vars:
+    zk_host: "{{ groups['zookeeper'][0] }}"
+    zookeeper_private_ip: "{{ hostvars[zk_host].private_ip | default(hostvars[zk_host].ansible_default_ipv4.address) }}"
+  tasks:
+    - name: Verify broker can reach ZooKeeper
+      ansible.builtin.wait_for:
+        host: "{{ zookeeper_private_ip }}"
+        port: 2181
+        timeout: 60
+
+    - name: Start Kafka
+      ansible.builtin.systemd:
+        name: kafka
+        state: started
+        enabled: true

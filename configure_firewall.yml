@@ -1,0 +1,70 @@
+---
+- name: Configure firewalld rules for Kubernetes and registry
+  hosts: kafka_cluster
+  become: true
+  gather_facts: yes
+
+  vars:
+    registry_port: 5000
+    nodeport_range: "30000-32767"
+    k8s_master_host: "{{ groups['kafka_broker'][0] }}"
+
+  tasks:
+    - name: Ensure firewalld is installed
+      package:
+        name: firewalld
+        state: present
+
+    - name: Ensure firewalld is running
+      systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    - name: Open Kubernetes control-plane ports on master
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop:
+        - 6443/tcp      # Kubernetes API server
+        - 2379-2380/tcp # etcd server client API
+        - 10257/tcp     # kube-controller-manager
+        - 10259/tcp     # kube-scheduler
+      when: inventory_hostname == k8s_master_host
+
+    - name: Open kubelet and kube-proxy ports on all nodes
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop:
+        - 10250/tcp     # kubelet API
+        - 10256/tcp     # kube-proxy metrics
+
+    - name: Allow Kubernetes NodePort service range
+      ansible.posix.firewalld:
+        port: "{{ nodeport_range }}/tcp"
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Allow Docker registry access
+      ansible.posix.firewalld:
+        port: "{{ registry_port }}/tcp"
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Allow application ports used inside cluster
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop:
+        - 9092/tcp    # Kafka broker service
+        - 5000/tcp    # Flask default HTTP (pod-to-pod)
+        - 27017/tcp   # MongoDB access from web/server

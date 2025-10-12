@@ -1,0 +1,192 @@
+---
+- name: Install & configure MongoDB on team2_vm5
+  hosts: team2_vm5
+  become: true
+  gather_facts: yes
+
+  vars:
+    mongo_app_db: "sensors"
+    mongo_app_user: "sensorapp"
+    mongo_app_password: "CHANGE_ME_STRONG_PASSWORD"
+    mongo_port: 27017
+    bind_ip: "0.0.0.0"   # use "192.168.5.178" to restrict to private IP
+
+  tasks:
+    # Clean any old/bad repos
+    - name: Remove any stale/bad MongoDB repo files
+      shell: |
+        set -e
+        rm -f /etc/apt/sources.list.d/*mongodb*.list || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure base packages are present
+      apt:
+        name:
+          - ca-certificates
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: Add MongoDB 7.0 public key
+      ansible.builtin.apt_key:
+        url: https://pgp.mongodb.com/server-7.0.asc
+        state: present
+
+    - name: Add MongoDB 7.0 apt source (use jammy on Noble)
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64,arm64] https://repo.mongodb.org/apt/ubuntu
+          jammy/mongodb-org/7.0 multiverse
+        filename: mongodb-org-7.0
+        state: present
+
+    - name: apt clean
+      shell: apt-get clean
+      changed_when: false
+
+    - name: Update apt cache (MongoDB repo)
+      apt:
+        update_cache: yes
+
+    - name: Install MongoDB server
+      apt:
+        name: mongodb-org
+        state: present
+
+    - name: Configure mongod.conf (clean, no deprecated options)
+      copy:
+        dest: /etc/mongod.conf
+        mode: "0644"
+        content: |
+          storage:
+            dbPath: /var/lib/mongodb
+          systemLog:
+            destination: file
+            logAppend: true
+            path: /var/log/mongodb/mongod.log
+          net:
+            port: {{ mongo_port }}
+            bindIp: {{ bind_ip }}
+          processManagement:
+            fork: false
+          security:
+            authorization: enabled
+      notify: restart mongod
+
+    - name: Enable & start mongod
+      systemd:
+        name: mongod
+        enabled: true
+        state: started
+
+    - name: Wait for mongod to be ready
+      wait_for:
+        host: "127.0.0.1"
+        port: "{{ mongo_port }}"
+        delay: 2
+        timeout: 60
+
+    # The mongodb_user module runs on the remote and needs pymongo available there.
+    - name: Try installing pymongo from apt
+      apt:
+        name: python3-pymongo
+        state: present
+      register: apt_pymongo
+      ignore_errors: true
+
+    - name: Fallback – ensure pip and install pymongo via pip if apt failed
+      block:
+        - name: Ensure python3-pip present
+          apt:
+            name: python3-pip
+            state: present
+        - name: Install pymongo via pip
+          pip:
+            name: pymongo
+            executable: pip3
+      when: apt_pymongo is failed
+
+    # ---- Toggle auth OFF -> create user -> ON (idempotent & deterministic) ----
+
+    - name: Ensure authorization is DISABLED temporarily
+      lineinfile:
+        path: /etc/mongod.conf
+        regexp: '^\s*authorization:\s*\w+'
+        line: '      authorization: disabled'
+        insertafter: '^security:'
+        state: present
+      notify: restart mongod
+
+    - name: Restart mongod after disabling auth (if changed)
+      meta: flush_handlers
+
+    - name: Wait for mongod after disabling auth
+      wait_for:
+        host: "127.0.0.1"
+        port: "{{ mongo_port }}"
+        delay: 2
+        timeout: 60
+
+    - name: Create application user while auth is disabled
+      community.mongodb.mongodb_user:
+        login_host: localhost
+        login_port: "{{ mongo_port }}"
+        # No login_user/password required because auth is disabled
+        database: "{{ mongo_app_db }}"
+        name: "{{ mongo_app_user }}"
+        password: "{{ mongo_app_password }}"
+        roles: ["readWrite"]
+        state: present
+
+    - name: Re-enable authorization
+      lineinfile:
+        path: /etc/mongod.conf
+        regexp: '^\s*authorization:\s*\w+'
+        line: '      authorization: enabled'
+        insertafter: '^security:'
+        state: present
+      notify: restart mongod
+
+    - name: Restart mongod after re-enabling auth (if changed)
+      meta: flush_handlers
+
+    - name: Final readiness check (auth enabled)
+      wait_for:
+        host: "127.0.0.1"
+        port: "{{ mongo_port }}"
+        delay: 2
+        timeout: 60
+        
+    - name: Ensure firewalld is installed
+      apt:
+        name: firewalld
+        state: present
+        update_cache: yes
+
+    - name: Ensure firewalld is enabled and running
+      systemd:
+        name: firewalld
+        enabled: true
+        state: started
+
+    - name: Open MongoDB port in firewalld
+      ansible.posix.firewalld:
+        port: "{{ mongo_port }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+
+
+    - name: Show connection URI for vm4
+      debug:
+        msg: "MONGO_URI=mongodb://{{ mongo_app_user }}:{{ mongo_app_password }}@{{ hostvars['team2_vm5'].private_ip }}:{{ mongo_port }}/{{ mongo_app_db }}?authSource={{ mongo_app_db }}"
+
+  handlers:
+    - name: restart mongod
+      systemd:
+        name: mongod
+        state: restarted

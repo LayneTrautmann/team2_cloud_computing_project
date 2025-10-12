@@ -1,0 +1,121 @@
+---
+- name: Deploy extended data pipeline workloads onto Kubernetes
+  hosts: "{{ groups['kafka_broker'][0] }}"
+  become: true
+  gather_facts: yes
+
+  vars:
+    manifest_dir: /tmp/pipeline-manifests
+    k8s_namespace: pipeline
+    registry_port: 5000
+    registry_host: "{{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}"
+    registry: "{{ registry_host }}:{{ registry_port }}"
+    image_tag: latest
+    publisher_job_name: publisher-job
+    publisher_device_id: publisher-job
+    publisher_source: k8s-job
+    publisher_log_every: 25
+    publisher_profile_file: k8s/publisher-profile.json
+    publisher_profile_content: "{{ lookup('file', publisher_profile_file) }}"
+    consumer_deployment_name: consumer-svc
+    consumer_replicas: 2
+    consumer_topics: ["weather", "airquality", "power"]
+    consumer_group_id: k8s-consumers
+    consumer_post_timeout: "5"
+    consumer_post_backoff: "1.0"
+    flask_deployment_name: flask-web
+    flask_service_name: flask-web
+    flask_replicas: 2
+    flask_container_port: 5000
+    flask_nodeport: 32000
+    mongo_db: sensors
+    kafka_bootstrap: "{{ groups['kafka_broker'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '(.*)', '\\1:9092') | join(',') }}"
+    mongo_uri: "mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@{{ hostvars['team2_vm5'].private_ip }}:27017/{{ mongo_db }}?authSource={{ mongo_db }}"
+    flask_service_internal_url: "http://{{ flask_service_name }}.{{ k8s_namespace }}.svc.cluster.local:{{ flask_container_port }}/update_data"
+
+  tasks:
+    - name: Ensure manifest staging directory exists
+      file:
+        path: "{{ manifest_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render Kubernetes namespace manifest
+      template:
+        src: templates/k8s/namespace.yaml.j2
+        dest: "{{ manifest_dir }}/00-namespace.yaml"
+      vars:
+        k8s_namespace: "{{ k8s_namespace }}"
+
+    - name: Render publisher profile configmap
+      template:
+        src: templates/k8s/publisher-profile-configmap.yaml.j2
+        dest: "{{ manifest_dir }}/01-publisher-profile.yaml"
+      vars:
+        k8s_namespace: "{{ k8s_namespace }}"
+        publisher_profile_content: "{{ publisher_profile_content }}"
+
+    - name: Render publisher job manifest
+      template:
+        src: templates/k8s/publisher-job.yaml.j2
+        dest: "{{ manifest_dir }}/02-publisher-job.yaml"
+      vars:
+        k8s_namespace: "{{ k8s_namespace }}"
+        registry: "{{ registry }}"
+        image_tag: "{{ image_tag }}"
+        kafka_bootstrap: "{{ kafka_bootstrap }}"
+        publisher_job_name: "{{ publisher_job_name }}"
+        publisher_device_id: "{{ publisher_device_id }}"
+        publisher_source: "{{ publisher_source }}"
+        publisher_log_every: "{{ publisher_log_every }}"
+
+    - name: Render consumer deployment manifest
+      template:
+        src: templates/k8s/consumer-deployment.yaml.j2
+        dest: "{{ manifest_dir }}/03-consumer-deployment.yaml"
+      vars:
+        k8s_namespace: "{{ k8s_namespace }}"
+        registry: "{{ registry }}"
+        image_tag: "{{ image_tag }}"
+        kafka_bootstrap: "{{ kafka_bootstrap }}"
+        consumer_deployment_name: "{{ consumer_deployment_name }}"
+        consumer_replicas: "{{ consumer_replicas }}"
+        consumer_topics: "{{ consumer_topics }}"
+        consumer_group_id: "{{ consumer_group_id }}"
+        consumer_post_timeout: "{{ consumer_post_timeout }}"
+        consumer_post_backoff: "{{ consumer_post_backoff }}"
+        flask_service_internal_url: "{{ flask_service_internal_url }}"
+
+    - name: Render flask deployment manifest
+      template:
+        src: templates/k8s/flask-deployment.yaml.j2
+        dest: "{{ manifest_dir }}/04-flask-deployment.yaml"
+      vars:
+        k8s_namespace: "{{ k8s_namespace }}"
+        registry: "{{ registry }}"
+        image_tag: "{{ image_tag }}"
+        flask_deployment_name: "{{ flask_deployment_name }}"
+        flask_replicas: "{{ flask_replicas }}"
+        flask_container_port: "{{ flask_container_port }}"
+        mongo_uri: "{{ mongo_uri }}"
+        mongo_db: "{{ mongo_db }}"
+
+    - name: Render flask service manifest
+      template:
+        src: templates/k8s/flask-service.yaml.j2
+        dest: "{{ manifest_dir }}/05-flask-service.yaml"
+      vars:
+        k8s_namespace: "{{ k8s_namespace }}"
+        flask_service_name: "{{ flask_service_name }}"
+        flask_container_port: "{{ flask_container_port }}"
+        flask_nodeport: "{{ flask_nodeport }}"
+
+    - name: Apply Kubernetes manifests in order
+      command: kubectl apply -f {{ item }} --kubeconfig /etc/kubernetes/admin.conf
+      loop:
+        - "{{ manifest_dir }}/00-namespace.yaml"
+        - "{{ manifest_dir }}/01-publisher-profile.yaml"
+        - "{{ manifest_dir }}/02-publisher-job.yaml"
+        - "{{ manifest_dir }}/03-consumer-deployment.yaml"
+        - "{{ manifest_dir }}/04-flask-deployment.yaml"
+        - "{{ manifest_dir }}/05-flask-service.yaml"

@@ -1,0 +1,22 @@
+{
+  "topics": [
+    {
+      "name": "weather",
+      "hz": 1.0,
+      "burst": 1,
+      "sensors": ["weather.temp_c", "weather.humidity_pct"]
+    },
+    {
+      "name": "airquality",
+      "hz": 0.5,
+      "burst": 2,
+      "sensors": ["air.pm25", "air.co2"]
+    },
+    {
+      "name": "power",
+      "hz": 0.2,
+      "burst": 1,
+      "sensors": ["power.watts"]
+    }
+  ]
+}

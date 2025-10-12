@@ -1,0 +1,37 @@
+---
+- name: Provision local Docker registry on Kubernetes master
+  hosts: "{{ groups['kafka_broker'][0] }}"
+  become: true
+  gather_facts: yes
+
+  vars:
+    registry_port: 5000
+    registry_name: local-registry
+    registry_data_dir: /opt/registry/data
+
+  tasks:
+    - name: Ensure registry data directory exists
+      file:
+        path: "{{ registry_data_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Pull registry image
+      community.docker.docker_image:
+        name: registry:2
+        source: pull
+
+    - name: Run private Docker registry container
+      community.docker.docker_container:
+        name: "{{ registry_name }}"
+        image: registry:2
+        state: started
+        restart_policy: always
+        published_ports:
+          - "{{ registry_port }}:5000"
+        volumes:
+          - "{{ registry_data_dir }}:/var/lib/registry"
+
+    - name: Show registry endpoint
+      debug:
+        msg: "Private registry available at {{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}:{{ registry_port }}"

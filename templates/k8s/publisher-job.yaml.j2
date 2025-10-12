@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ publisher_job_name }}
+  namespace: {{ k8s_namespace }}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: publisher
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: publisher
+          image: {{ registry }}/publisher:{{ image_tag }}
+          imagePullPolicy: Always
+          command: ["python", "/app/publisher.py"]
+          args:
+            - "--brokers"
+            - "{{ kafka_bootstrap }}"
+            - "--profile"
+            - "/config/profile.json"
+            - "--device-id"
+            - "{{ publisher_device_id }}"
+            - "--source"
+            - "{{ publisher_source }}"
+            - "--log-every"
+            - "{{ publisher_log_every }}"
+          volumeMounts:
+            - name: publisher-profile
+              mountPath: /config
+      volumes:
+        - name: publisher-profile
+          configMap:
+            name: publisher-profile
+            items:
+              - key: profile.json
+                path: profile.json
