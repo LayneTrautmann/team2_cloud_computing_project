@@ -149,27 +149,29 @@ spec:
         - name: install-cni-plugin
           image: docker.io/flannel/flannel-cni-plugin:v1.2.0
           command:
-            - cp
-          args:
-            - -f
-            - /opt/cni/bin/flannel
-            - /opt/cni/bin/portmap
-            - /opt/cni/bin/bandwidth
-            - /opt/cni/bin
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              for bin in flannel portmap bandwidth; do
+                if [ -f "/opt/cni/bin/${bin}" ]; then
+                  cp -f "/opt/cni/bin/${bin}" "/host/opt/cni/bin/${bin}"
+                fi
+              done
           volumeMounts:
             - name: cni-plugin
-              mountPath: /opt/cni/bin
+              mountPath: /host/opt/cni/bin
         - name: prepare-cni-netconf
           image: docker.io/flannel/flannel:v0.22.3
           command:
-            - cp
-          args:
-            - -f
-            - /etc/kube-flannel/cni-conf.json
-            - /etc/cni/net.d/10-flannel.conflist
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              cp -f /etc/kube-flannel/cni-conf.json /host/etc/cni/net.d/10-flannel.conflist
           volumeMounts:
             - name: cni
-              mountPath: /etc/cni/net.d
+              mountPath: /host/etc/cni/net.d
             - name: flannel-cfg
               mountPath: /etc/kube-flannel/
       volumes:

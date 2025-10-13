@@ -15,6 +15,15 @@
     flannel_manifest_dest: /tmp/kube-flannel.yml
 
   tasks:
+    - name: Ensure CNI directories exist on control plane
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /opt/cni/bin
+        - /etc/cni/net.d
+
     - name: Check if control plane already initialized
       stat:
         path: /etc/kubernetes/admin.conf
@@ -87,6 +96,15 @@
     k8s_master_host: "{{ groups['kafka_broker'][0] }}"
 
   tasks:
+    - name: Ensure CNI directories exist on worker
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /opt/cni/bin
+        - /etc/cni/net.d
+
     - name: Check if kubelet already has Kubernetes config
       stat:
         path: /etc/kubernetes/kubelet.conf
