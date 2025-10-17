@@ -195,6 +195,41 @@
             "insecure-registries": ["{{ registry_endpoint }}"]
           }
 
+    - name: Regenerate containerd default configuration
+      command: bash -c "containerd config default > /etc/containerd/config.toml"
+
+    - name: Remove stale containerd mirror block for local registry
+      blockinfile:
+        path: /etc/containerd/config.toml
+        marker: "# ANSIBLE MANAGED LOCAL REGISTRY {mark}"
+        block: |
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."{{ registry_endpoint }}"]
+            endpoint = ["http://{{ registry_endpoint }}"]
+        state: absent
+
+    - name: Ensure containerd registry directory exists
+      file:
+        path: "/etc/containerd/certs.d/{{ registry_endpoint }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure containerd registry config path uses certs.d
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*config_path\s*='
+        line: '      config_path = "/etc/containerd/certs.d"'
+        insertafter: '^\[plugins."io.containerd.grpc.v1.cri".registry\]'
+        firstmatch: true
+
+    - name: Configure containerd hosts.toml for local registry
+      copy:
+        dest: "/etc/containerd/certs.d/{{ registry_endpoint }}/hosts.toml"
+        mode: "0644"
+        content: |
+          server = "http://{{ registry_endpoint }}"
+          [host."http://{{ registry_endpoint }}"]
+            capabilities = ["pull", "resolve"]
+
     - name: Download Kubernetes apt key
       get_url:
         url: "{{ k8s_repo_key_url }}"
