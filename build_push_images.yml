@@ -28,26 +28,32 @@
         state: directory
         mode: "0755"
 
-    - name: Prepare build context for each component
-      block:
-        - name: Ensure context directory exists
-          file:
-            path: "{{ build_root }}/{{ item.name }}"
-            state: directory
-            mode: "0755"
-
-        - name: Copy Docker context files (Dockerfile + requirements)
-          copy:
-            src: "{{ item.context }}/"
-            dest: "{{ build_root }}/{{ item.name }}/"
-            mode: "0644"
-
-        - name: Copy application source into build context
-          copy:
-            src: "{{ item.script }}"
-            dest: "{{ build_root }}/{{ item.name }}/{{ item.script | basename }}"
-            mode: "0644"
+    - name: Ensure context directory exists
+      file:
+        path: "{{ build_root }}/{{ component.name }}"
+        state: directory
+        mode: "0755"
       loop: "{{ components }}"
+      loop_control:
+        loop_var: component
+
+    - name: Copy Docker context files (Dockerfile + requirements)
+      copy:
+        src: "{{ component.context }}/"
+        dest: "{{ build_root }}/{{ component.name }}/"
+        mode: "0644"
+      loop: "{{ components }}"
+      loop_control:
+        loop_var: component
+
+    - name: Copy application source into build context
+      copy:
+        src: "{{ component.script }}"
+        dest: "{{ build_root }}/{{ component.name }}/{{ component.script | basename }}"
+        mode: "0644"
+      loop: "{{ components }}"
+      loop_control:
+        loop_var: component
 
     - name: Build and push images to registry
       community.docker.docker_image:

@@ -5,4 +5,4 @@ metadata:
   namespace: {{ k8s_namespace }}
 data:
   profile.json: |
-{{ publisher_profile_content | indent(4) }}
+{{ publisher_profile_content | indent(4, True) }}

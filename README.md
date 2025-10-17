@@ -1,9 +1,9 @@
 # PA2 K8s Deployment – Current Status
 
 This repository contains the automation and application code we used to bring up
-the PA2 data pipeline.  Tasks (a) and (b) from the assignment are complete, and
-task (c) is *almost* done—only the CNI plug‑in needs to be fixed so that all
-Kubernetes nodes report `Ready`.
+the PA2 data pipeline.  Docker/Kubernetes bootstrap (tasks a–c) is stable, the
+private registry plus image rollout (task d/h/i) is in place, and the pipeline
+pods can be redeployed end‑to‑end from our Ansible playbooks.
 
 ---
 
@@ -14,8 +14,12 @@ Kubernetes nodes report `Ready`.
 | (a) Docker & K8s install via Ansible | ✅ | `install_docker_k8s.yml` run on vm1–vm5 |
 | (b) Firewall updates | ✅ | `configure_firewall.yml` applied |
 | (c) K8s cluster creation | ✅ | `setup_k8s_cluster.yml` stages CNI dirs, applies Flannel, joins workers; cluster verified `Ready` |
-| (d) Private registry | ⏳ | `setup_registry.yml`, `build_push_images.yml` ready to use |
-| (e–i) App extensions & K8s manifests | ⏳ | Deployables under `templates/k8s/`, `deploy_k8s_apps.yml` |
+| (d) Docker images & K8s deploy | ✅ | Build + push publisher/consumer/flask images, roll out via K8s |
+| (e) Extend publisher logic | ⏳ | TODO |
+| (f) Extend subscriber logic | ⏳ | TODO |
+| (g) Extend Flask web server | ⏳ | TODO |
+| (h) Private registry | ✅ | Local registry on vm1 (`setup_registry.yml`) |
+| (i) K8s YAML layout | ✅ | Templates under `templates/k8s/` (job/deploy/service mix) |
 
 ---
 
@@ -23,7 +27,7 @@ Kubernetes nodes report `Ready`.
 
 1. **SSH tunnels**
    ```bash
-   cd <projet directory>
+   cd /Users/laynetrautmann/Desktop/Cloud\ Computing/Pa1   # or your clone path
    ./start_tunnels.sh
    ```
 
@@ -64,22 +68,68 @@ workers. All nodes should report `Ready` within a minute and will show up as
 
 ---
 
-## Next Work Items
+## Private Registry & Image Build (tasks d/h/i)
+
+Run these whenever you need fresh images or want to validate the registry:
+
+```bash
+# 1) make sure tunnels + virtualenv are active (see prerequisites above)
+
+# 2) start/refresh the registry container on vm1
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local ANSIBLE_REMOTE_TEMP=/tmp \
+  ansible-playbook -i inventory.ini setup_registry.yml
+
+# 3) build publisher/consumer/flask images locally on vm1 and push to the registry
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local ANSIBLE_REMOTE_TEMP=/tmp \
+  ansible-playbook -i inventory.ini build_push_images.yml
+
+# 4) verify the registry and node access
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "curl -s http://localhost:5000/v2/_catalog"
+
+# (optional) confirm a worker can pull from the registry
+ssh -p 2203 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "sudo crictl --runtime-endpoint unix:///run/containerd/containerd.sock --image-endpoint unix:///run/containerd/containerd.sock pull 192.168.5.21:5000/consumer:latest"
+```
+
+To deploy the pipeline components (namespace, ConfigMap, publisher job, consumer
+deployment, flask deployment/service) against the cluster:
+
+```bash
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local ANSIBLE_REMOTE_TEMP=/tmp \
+  ansible-playbook -i inventory.ini deploy_k8s_apps.yml
+
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "kubectl --kubeconfig ~/.kube/config get pods -n pipeline"
+```
+
+The pods should progress to `Running` within a few moments. The consumer and
+flask logs are handy sanity checks:
+
+```bash
+# consumer log stream (one pod example)
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "kubectl --kubeconfig ~/.kube/config logs -n pipeline deploy/consumer-svc -f"
+
+# flask ingestion log
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "kubectl --kubeconfig ~/.kube/config logs -n pipeline deploy/flask-web -f"
+```
+
+## Next Work Items (tasks e–g)
 
 1. **Private registry** *(task d)*  
-   - Use `setup_registry.yml` to start a registry on vm1.  
-   - `build_push_images.yml` builds publisher/consumer/flask images and pushes
-     them to the registry.
+   - ✅ Completed (see commands above for re-run details).
 
-2. **Extended publisher/subscriber/web logic** *(tasks e–g)*  
+2. **Extended publisher/subscriber/web logic**  
    - Implement the requirements in `publisher.py`, `consumer.py`,
      `flask_server.py`.  
    - When the new images are ready, redeploy via Kubernetes using
      `deploy_k8s_apps.yml`.
 
-3. **K8s rollout** *(task i)*  
-   - Customize the manifests under `templates/k8s/`; ensure workloads pull from
-     the private registry and expose the required services/NodePorts.
+3. **Follow-on tuning**  
+   - Adjust deployment replicas, topic fan-out, and service exposure once the
+     extended logic is in place.
 
 ---
 
