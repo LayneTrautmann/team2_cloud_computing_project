@@ -1,7 +1,16 @@
 ---
-# Initialize the Kubernetes control plane on vm1
+# ===============================
+# Kubernetes cluster creation (PA2)
+# - Control plane on vm1
+# - Workers join vm1
+# - Optional: untaint vm1 to schedule pods
+# - Flannel DS selector mismatch handled
+# - Verification block at the end
+# ===============================
+
+# ---------- Control plane on vm1 ----------
 - name: Initialize Kubernetes control plane
-  hosts: "{{ groups['kafka_broker'][0] }}"
+  hosts: "{{ groups['kafka_broker'][0] }}"   # team2_vm1 per your hosts
   become: true
   gather_facts: yes
 
@@ -9,12 +18,52 @@
     pod_network_cidr: 10.244.0.0/16
     k8s_user: cc
     kubeconfig_dest: "/home/{{ k8s_user }}/.kube/config"
-    registry_port: 5000
-    master_ip: "{{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}"
     flannel_manifest_src: k8s/kube-flannel.yml
     flannel_manifest_dest: /tmp/kube-flannel.yml
+    # Robust IP selection (works with your localhost tunnels inventory)
+    master_ip: >-
+      {{ hostvars[inventory_hostname].private_ip
+         | default(hostvars[inventory_hostname].ansible_host
+         | default(ansible_default_ipv4.address)) }}
 
   tasks:
+    - name: Ensure /tmp is usable for Ansible
+      file:
+        path: /tmp
+        state: directory
+        mode: "1777"
+
+    # ---- kubeadm prerequisites (prevent flaky init/join) ----
+    - name: Disable swap (runtime)
+      command: swapoff -a
+      when: ansible_swaptotal_mb | default(0) | int > 0
+      changed_when: false
+
+    - name: Ensure swap is disabled in /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^\s*([^#]\S+\s+\S+\s+swap\s+\S+\s+\S+\s+\S+)'
+        replace: '# \1'
+      failed_when: false
+
+    - name: Load br_netfilter
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Enable netfilter/forwarding sysctls
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_set: true
+        reload: true
+      loop:
+        - { name: net.ipv4.ip_forward, value: '1' }
+        - { name: net.bridge.bridge-nf-call-iptables, value: '1' }
+        - { name: net.bridge.bridge-nf-call-ip6tables, value: '1' }
+
+    # (Harmless, but ensures CNI dirs exist if needed)
     - name: Ensure CNI directories exist on control plane
       file:
         path: "{{ item }}"
@@ -29,7 +78,7 @@
         path: /etc/kubernetes/admin.conf
       register: admin_conf
 
-    - name: Initialize the Kubernetes control plane (kubeadm init)
+    - name: kubeadm init (first run only)
       command: >
         kubeadm init
         --apiserver-advertise-address={{ master_ip }}
@@ -41,7 +90,7 @@
         --upload-certs
       when: not admin_conf.stat.exists
 
-    - name: Ensure {{ k8s_user }} kube config directory exists
+    - name: Ensure kube config dir for {{ k8s_user }}
       file:
         path: "/home/{{ k8s_user }}/.kube"
         state: directory
@@ -49,7 +98,7 @@
         group: "{{ k8s_user }}"
         mode: "0700"
 
-    - name: Copy admin kubeconfig to {{ k8s_user }}
+    - name: Copy admin kubeconfig to user
       copy:
         src: /etc/kubernetes/admin.conf
         dest: "{{ kubeconfig_dest }}"
@@ -58,35 +107,78 @@
         group: "{{ k8s_user }}"
         remote_src: true
 
-    - name: Retrieve kubeadm join command
-      command: kubeadm token create --print-join-command --ttl 1h
-      register: join_command_raw
-      changed_when: false
-
-    - name: Persist kubeadm join command fact
-      set_fact:
-        kubeadm_join_command: "{{ join_command_raw.stdout }} --cri-socket unix:///run/containerd/containerd.sock"
-
-    - name: Display join command for reference
-      debug:
-        msg: "{{ kubeadm_join_command }}"
-
-    - name: Copy Flannel CNI manifest to control plane
+    # -------- Flannel install with selector-mismatch protection --------
+    - name: Place Flannel CNI manifest
       copy:
         src: "{{ flannel_manifest_src }}"
         dest: "{{ flannel_manifest_dest }}"
         mode: "0644"
 
-    - name: Install Flannel CNI (idempotent apply)
+    - name: Check existing Flannel DS selector (if any)
+      command: >
+        kubectl -n kube-flannel get ds kube-flannel-ds
+        -o jsonpath='{.spec.selector.matchLabels.app}'
+        --kubeconfig /etc/kubernetes/admin.conf
+      register: flannel_selector
+      failed_when: false
+      changed_when: false
+
+    - name: Delete Flannel DS if selector mismatches expected 'kube-flannel'
+      command: >
+        kubectl -n kube-flannel delete ds kube-flannel-ds
+        --kubeconfig /etc/kubernetes/admin.conf
+      when: flannel_selector.rc == 0 and flannel_selector.stdout != 'kube-flannel'
+
+    - name: Apply Flannel CNI
       command: kubectl apply -f {{ flannel_manifest_dest }} --kubeconfig /etc/kubernetes/admin.conf
 
-    - name: Allow scheduling on the control plane node
+    - name: Wait for Flannel pods to be Ready (up to 10m)
+      shell: >
+        kubectl -n kube-flannel wait --for=condition=Ready pod
+        -l app=kube-flannel --timeout=600s
+        --kubeconfig /etc/kubernetes/admin.conf
+      changed_when: false
+
+    # Optional: make control-plane node schedulable
+    - name: Allow scheduling on control plane (remove taint)
       command: kubectl taint nodes {{ inventory_hostname }} node-role.kubernetes.io/control-plane- --kubeconfig /etc/kubernetes/admin.conf
       register: taint_result
       failed_when: taint_result.rc not in [0, 1]
       changed_when: taint_result.rc == 0
 
-# Join the remaining nodes (including vm1 if re-tainted) to the cluster
+    - name: Get kubeadm version (short form)
+      command: kubeadm version -o short
+      register: kubeadm_version
+      changed_when: false
+
+    - name: Ensure kube-proxy DaemonSet matches control-plane version
+      command: >
+        kubectl --kubeconfig /etc/kubernetes/admin.conf
+        -n kube-system set image ds/kube-proxy
+        kube-proxy=registry.k8s.io/kube-proxy:{{ kubeadm_version.stdout }}
+      register: kube_proxy_image
+      changed_when: "'image updated' in kube_proxy_image.stdout"
+
+    - name: Wait for kube-proxy rollout (up to 3m)
+      command: kubectl -n kube-system rollout status ds/kube-proxy --timeout=180s --kubeconfig /etc/kubernetes/admin.conf
+      changed_when: false
+
+    # Fresh join token (longer TTL so the play doesn't time out)
+    - name: Retrieve kubeadm join command
+      command: kubeadm token create --print-join-command --ttl 6h
+      register: join_command_raw
+      changed_when: false
+
+    - name: Persist join command as hostvar
+      set_fact:
+        kubeadm_join_command: "{{ join_command_raw.stdout }} --cri-socket unix:///run/containerd/containerd.sock"
+
+    - name: Show join command (debug)
+      debug:
+        var: kubeadm_join_command
+
+
+# ---------- Workers: vm2..vm5 ----------
 - name: Join worker nodes to the cluster
   hosts: "{{ groups['kafka_cluster'] | difference([groups['kafka_broker'][0]]) }}"
   become: true
@@ -96,6 +188,42 @@
     k8s_master_host: "{{ groups['kafka_broker'][0] }}"
 
   tasks:
+    - name: Ensure /tmp is usable for Ansible
+      file:
+        path: /tmp
+        state: directory
+        mode: "1777"
+
+    # ---- kubeadm prerequisites ----
+    - name: Disable swap (runtime)
+      command: swapoff -a
+      when: ansible_swaptotal_mb | default(0) | int > 0
+      changed_when: false
+
+    - name: Ensure swap is disabled in /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^\s*([^#]\S+\s+\S+\s+swap\s+\S+\s+\S+\s+\S+)'
+        replace: '# \1'
+      failed_when: false
+
+    - name: Load br_netfilter
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Enable netfilter/forwarding sysctls
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_set: true
+        reload: true
+      loop:
+        - { name: net.ipv4.ip_forward, value: '1' }
+        - { name: net.bridge.bridge-nf-call-iptables, value: '1' }
+        - { name: net.bridge.bridge-nf-call-ip6tables, value: '1' }
+
     - name: Ensure CNI directories exist on worker
       file:
         path: "{{ item }}"
@@ -119,3 +247,42 @@
         name: kubelet
         state: started
         enabled: true
+
+
+# ---------- Verification from vm1 ----------
+- name: Verify cluster is healthy
+  hosts: "{{ groups['kafka_broker'][0] }}"
+  become: true
+  gather_facts: no
+
+  tasks:
+    - name: Wait for all nodes to be Ready (up to 3m)
+      command: kubectl wait --for=condition=Ready node --all --timeout=180s --kubeconfig /etc/kubernetes/admin.conf
+      register: wait_nodes
+      changed_when: false
+
+    - name: Show nodes (wide)
+      command: kubectl get nodes -o wide --kubeconfig /etc/kubernetes/admin.conf
+      register: nodes
+      changed_when: false
+
+    - name: Show key kube-system pods
+      command: kubectl -n kube-system get pods -o wide --kubeconfig /etc/kubernetes/admin.conf
+      register: syspods
+      changed_when: false
+
+    - debug:
+        msg:
+          - "{{ nodes.stdout }}"
+          - "{{ syspods.stdout }}"
+
+    - name: Ensure CoreDNS deployment is Available
+      command: kubectl -n kube-system rollout status deploy/coredns --timeout=180s --kubeconfig /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: Uncordon any nodes left unschedulable
+      shell: >
+        kubectl get nodes --no-headers --kubeconfig /etc/kubernetes/admin.conf
+        | awk '/SchedulingDisabled/{print $1}'
+        | xargs -r kubectl --kubeconfig /etc/kubernetes/admin.conf uncordon
+      changed_when: false
