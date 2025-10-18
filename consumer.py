@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os, sys, time, signal, logging, json
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, List
 import requests
 from requests.adapters import HTTPAdapter, Retry
 from kafka import KafkaConsumer
@@ -21,10 +21,20 @@ if _topics_env:
     KAFKA_TOPICS = list(_topics_env)
 else:
     KAFKA_TOPICS = list(_parse_topics(KAFKA_TOPIC) or ["utilizations"])
+
+# NEW (scale & flexibility)
+KAFKA_TOPIC_PATTERN = os.getenv("KAFKA_TOPIC_PATTERN")  # e.g. ^weather\.|^air\.|^water\.
+KAFKA_AUTO_OFFSET_RESET = os.getenv("KAFKA_AUTO_OFFSET_RESET", "latest")  # or "earliest"
 KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "vm3-consumer")
+KAFKA_INSTANCE_ID = os.getenv("KAFKA_INSTANCE_ID")  # static membership id (optional)
+
 FLASK_URL = os.getenv("FLASK_URL", "http://127.0.0.1:5000/update_data")
 POST_TIMEOUT = float(os.getenv("POST_TIMEOUT", "5"))
 POST_BACKOFF_SEC = float(os.getenv("POST_BACKOFF_SEC", "1.0"))
+
+# New: batching to reduce Flask pressure
+POST_BATCH_SIZE = int(os.getenv("POST_BATCH_SIZE", "1"))  # if >1, use bulk endpoint
+POST_ENDPOINT_BULK = os.getenv("FLASK_URL_BULK", "").strip() or None  # e.g. http://flask:5000/bulk_update
 
 # ---------- Logging ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -151,20 +161,63 @@ def main() -> int:
     log.info("Starting consumer | bootstrap=%s | topics=%s | group_id=%s | flask_url=%s",
              KAFKA_BOOTSTRAP, KAFKA_TOPICS, KAFKA_GROUP_ID, FLASK_URL)
 
-    consumer = KafkaConsumer(
-        *KAFKA_TOPICS,
+    # Build kwargs to allow cooperative-sticky + static membership when available
+    consumer_kwargs = dict(
         bootstrap_servers=KAFKA_BOOTSTRAP,
         group_id=KAFKA_GROUP_ID,
         enable_auto_commit=True,
-        auto_offset_reset="latest",
+        auto_offset_reset=KAFKA_AUTO_OFFSET_RESET,
         consumer_timeout_ms=0,
         request_timeout_ms=30000,
         max_poll_interval_ms=300000,
         reconnect_backoff_ms=50,
         reconnect_backoff_max_ms=1000,
     )
+    # Optional scale-friendly settings (ignore if kafka-python too old)
+    try:
+        consumer_kwargs["partition_assignment_strategy"] = ("cooperative-sticky",)
+    except Exception:
+        pass
+    if KAFKA_INSTANCE_ID:
+        consumer_kwargs["group_instance_id"] = KAFKA_INSTANCE_ID
+
+    try:
+        consumer = KafkaConsumer(**consumer_kwargs)
+    except TypeError:
+        # fallback (older kafka-python missing some kwargs)
+        for k in ("partition_assignment_strategy", "group_instance_id"):
+            consumer_kwargs.pop(k, None)
+        consumer = KafkaConsumer(**consumer_kwargs)
+
+    if KAFKA_TOPIC_PATTERN:
+        consumer.subscribe(pattern=KAFKA_TOPIC_PATTERN)
+    else:
+        consumer.subscribe(topics=KAFKA_TOPICS)
 
     session = make_http_session()
+    _batch: List[Dict[str, Any]] = []
+
+    def flush_batch():
+        if not _batch:
+            return
+        try:
+            if POST_BATCH_SIZE > 1 and POST_ENDPOINT_BULK:
+                resp = session.post(POST_ENDPOINT_BULK, json=_batch, timeout=POST_TIMEOUT)
+                if resp.status_code != 200:
+                    log.warning("Bulk POST failed status=%s body=%s",
+                                resp.status_code, (resp.text or "")[:200])
+            else:
+                # send individually to /update_data
+                for doc in _batch:
+                    r = session.post(FLASK_URL, json=doc, timeout=POST_TIMEOUT)
+                    if r.status_code != 200:
+                        log.warning("Flask POST failed status=%s body=%s",
+                                    r.status_code, (r.text or "")[:200])
+            log.info("Flask POST ok (batch size=%d)", len(_batch))
+        except Exception as e:
+            log.error("Error posting to Flask (batch size=%d): %s", len(_batch), e)
+        finally:
+            _batch.clear()
 
     try:
         while not _shutdown:
@@ -180,30 +233,26 @@ def main() -> int:
                         doc = normalize_message(
                             msg.value, msg.key, tp.topic, tp.partition, msg.offset
                         )
-                        # Log a compact preview (avoid dumping huge docs)
+                        # compact preview
                         preview = json.dumps({k: doc[k] for k in ("sensorType", "value", "values", "raw") if k in doc})[:240]
                         log.info("Consumed %s p=%s o=%s | %s", tp.topic, tp.partition, msg.offset, preview)
                     except Exception as e:
-                        log.exception("Normalization error; skipping message at %s-%s@%s: %s",
+                        log.exception("Normalization error; skipping %s-%s@%s: %s",
                                       tp.topic, tp.partition, msg.offset, e)
                         continue
 
-                    # POST to Flask (Flask will add ts/sensorType defaults if missing)
-                    try:
-                        resp = session.post(FLASK_URL, json=doc, timeout=POST_TIMEOUT)
-                        if resp.status_code == 200:
-                            log.info("Flask POST ok")
-                        else:
-                            log.warning("Flask POST failed status=%s body=%s",
-                                        resp.status_code, (resp.text or "")[:200])
-                            time.sleep(POST_BACKOFF_SEC)
-                    except Exception as e:
-                        log.error("Error posting to Flask: %s", e)
-                        time.sleep(POST_BACKOFF_SEC)
+                    # enqueue & flush in batches
+                    _batch.append(doc)
+                    if len(_batch) >= max(1, POST_BATCH_SIZE):
+                        flush_batch()
     except Exception as e:
         log.exception("Fatal error in consumer loop: %s", e)
         return 1
     finally:
+        try:
+            flush_batch()
+        except Exception:
+            pass
         try:
             consumer.close()
         except Exception:

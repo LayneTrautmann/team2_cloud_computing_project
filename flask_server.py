@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import logging, os, signal
 from datetime import datetime
+from typing import List, Dict, Any, Optional
 from pymongo import MongoClient, ASCENDING, errors
 from bson.objectid import ObjectId
 from urllib.parse import urlparse
@@ -12,7 +13,7 @@ log = logging.getLogger("flask-app")
 app = Flask(__name__)
 
 # -------- Mongo wiring (env-driven) --------
-def _db_name_from_uri(uri: str) -> str | None:
+def _db_name_from_uri(uri: str) -> Optional[str]:
     try:
         p = urlparse(uri)
         # urlparse puts the db in path like "/sensors"
@@ -55,7 +56,7 @@ def _coerce_payload(raw):
     """Ensure minimal schema + server-side timestamp fallback."""
     payload = raw if isinstance(raw, dict) else {}
     payload.setdefault("ts", datetime.utcnow().isoformat() + "Z")
-    payload.setdefault("sensorType", payload.get("sensor_type", "unknown"))
+    payload.setdefault("sensorType", payload.get("sensor_type", payload.get("sensorType", "unknown")))
     return payload
 
 # -------- Routes --------
@@ -72,6 +73,26 @@ def update_data():
     except errors.PyMongoError as e:
         log.exception("Mongo insert failed")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route("/bulk_update", methods=["POST"])
+def bulk_update():
+    try:
+        payload = request.get_json(force=True, silent=True)
+        if not isinstance(payload, list):
+            return jsonify({"status":"error","error":"expected JSON array"}), 400
+
+        docs: List[Dict[str, Any]] = []
+        for item in payload:
+            if isinstance(item, dict):
+                docs.append(_coerce_payload(item))
+        if not docs:
+            return jsonify({"status":"ok","inserted":0}), 200
+
+        result = readings.insert_many(docs, ordered=False)
+        return jsonify({"status":"ok","inserted":len(result.inserted_ids)}), 200
+    except errors.PyMongoError as e:
+        log.exception("Mongo bulk insert failed")
+        return jsonify({"status":"error","error":str(e)}), 500
 
 @app.route("/last", methods=["GET"])
 def last():
@@ -96,6 +117,17 @@ def readyz():
         return jsonify({"status": "ready"}), 200
     except Exception as e:
         return jsonify({"status": "not_ready", "error": str(e)}), 503
+
+# Tiny metric for eyeballing load
+_requests_total = 0
+@app.before_request
+def _count_req():
+    global _requests_total
+    _requests_total += 1
+
+@app.route("/metrics")
+def metrics():
+    return f"flask_requests_total { _requests_total }\n", 200, {"Content-Type":"text/plain"}
 
 # -------- Graceful shutdown --------
 def _graceful_shutdown(*_):

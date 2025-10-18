@@ -32,3 +32,21 @@ spec:
               value: "{{ consumer_post_backoff }}"
             - name: KAFKA_GROUP_ID
               value: "{{ consumer_group_id }}"
+
+            # ??? Add these for PA2 (f): pattern matching, batching, and scaling
+            - name: KAFKA_TOPIC_PATTERN
+              value: "^(weather\\.|air\\.|water\\.|light\\.|sys\\.)"
+              # Match weather, air, water, light, and system metrics dynamically
+            - name: KAFKA_AUTO_OFFSET_RESET
+              value: "latest"
+            - name: KAFKA_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+              # Unique consumer identity (lets K8s replicas join same group)
+            - name: POST_BATCH_SIZE
+              value: "20"
+              # Number of messages to batch per POST (useful for scaling)
+            - name: FLASK_URL_BULK
+              value: "http://flask-service:5000/bulk_update"
+              # Optional: If you extend Flask to handle bulk inserts later

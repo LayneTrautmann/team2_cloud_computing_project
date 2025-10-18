@@ -15,7 +15,7 @@ spec:
         - name: publisher
           image: {{ registry }}/publisher:{{ image_tag }}
           imagePullPolicy: Always
-          command: ["python", "/app/publisher.py"]
+          command: ["python3", "/app/publisher3.py"]
           args:
             - "--brokers"
             - "{{ kafka_bootstrap }}"
@@ -27,6 +27,26 @@ spec:
             - "{{ publisher_source }}"
             - "--log-every"
             - "{{ publisher_log_every }}"
+
+            # ? Added PA2 (e) parameters for stress, scaling, and automation
+            - "--topic-mode"
+            - "shared"             # or "per-sensor" for separate topics
+            - "--rate-multiplier"
+            - "4.0"                # increases all sensors' rates by 4×
+            - "--key-strategy"
+            - "sensor"             # message key: sensor | device | random
+            - "--duration-sec"
+            - "180"                # auto-stop after 3 minutes (for Jobs)
+            # Optional: cap by number of messages
+            # - "--max-messages"
+            # - "20000"
+
+            # Optional: create topics automatically (requires ACLs)
+            # - "--create-topic"
+            # - "--partitions"
+            # - "3"
+            # - "--replication-factor"
+            # - "2"
           volumeMounts:
             - name: publisher-profile
               mountPath: /config

@@ -6,7 +6,7 @@ metadata:
   labels:
     app: flask
 spec:
-  replicas: {{ flask_replicas }}
+  replicas: {{ flask_replicas }}                  # scale this (e.g., 2 or 3) as load grows
   selector:
     matchLabels:
       app: flask
@@ -30,3 +30,34 @@ spec:
               value: "{{ mongo_uri }}"
             - name: MONGO_DB
               value: "{{ mongo_db }}"
+            # optional: make logs flush immediately (nicer in k8s)
+            - name: PYTHONUNBUFFERED
+              value: "1"
+
+          # Health checks map to endpoints already in your flask_server.py
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          # Give the scheduler a hint and keep pods from overcommitting the node
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
