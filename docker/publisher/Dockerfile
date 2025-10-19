@@ -10,6 +10,6 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY publisher3.py .
+COPY publisher.py .
 
 ENTRYPOINT ["python3", "/app/publisher.py"]
