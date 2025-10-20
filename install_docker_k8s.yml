@@ -174,12 +174,6 @@
       args:
         creates: /etc/containerd/config.toml
 
-    - name: Ensure containerd uses systemd cgroups
-      replace:
-        path: /etc/containerd/config.toml
-        regexp: 'SystemdCgroup = false'
-        replace: 'SystemdCgroup = true'
-
     - name: Configure Docker daemon defaults
       copy:
         dest: /etc/docker/daemon.json
@@ -197,6 +191,18 @@
 
     - name: Regenerate containerd default configuration
       command: bash -c "containerd config default > /etc/containerd/config.toml"
+
+    - name: Set containerd sandbox image to pause 3.10.1
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*sandbox_image = ".*"$'
+        replace: '    sandbox_image = "registry.k8s.io/pause:3.10.1"'
+
+    - name: Enable containerd SystemdCgroup support
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup = false$'
+        replace: '            SystemdCgroup = true'
 
     - name: Remove legacy containerd mirror block for local registry
       replace:

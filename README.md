@@ -1,9 +1,14 @@
 # PA2 K8s Deployment – Current Status
 
 This repository contains the automation and application code we used to bring up
-the PA2 data pipeline.  Docker/Kubernetes bootstrap (tasks a–c) is stable, the
+the PA2 data pipeline. Docker/Kubernetes bootstrap (tasks a–c) is stable, the
 private registry plus image rollout (task d/h/i) is in place, and the pipeline
-pods can be redeployed end‑to‑end from our Ansible playbooks.
+pods can be redeployed end-to-end from our Ansible playbooks.
+
+All paths below assume you are inside the project directory (for example,
+`PROJECT_DIR=~/cloud-pa2`). Replace `~/.ssh/team2_key.pem` with your key path if
+it differs. The commands work the same on macOS, Linux, or Windows (use Git Bash
+or WSL so that `ssh`, `kubectl`, and `ansible-playbook` are available).
 
 ---
 
@@ -17,9 +22,78 @@ pods can be redeployed end‑to‑end from our Ansible playbooks.
 | (d) Docker images & K8s deploy | ✅ | Build + push publisher/consumer/flask images, roll out via K8s |
 | (e) Extend publisher logic | ✅ | Publisher sends the new sensor mix, 3‑minute job controlled through the profile ConfigMap |
 | (f) Extend subscriber logic | ✅ | Consumer handles regex topic fan-out, batches to `/bulk_update`, recovers from pattern conflicts |
-| (g) Extend Flask web server | ✅ | `/bulk_update`, `/readyz`, `/healthz`, `/last` live; still using the Flask dev server (switching to gunicorn is optional polish) |
+| (g) Extend Flask web server | ✅ | `/bulk_update`, `/readyz`, `/healthz`, `/last` live; Flask now runs behind gunicorn (no CrashLoopBackOff) |
 | (h) Private registry | ✅ | Local registry on vm1 (`setup_registry.yml`) |
 | (i) K8s YAML layout | ✅ | Templates under `templates/k8s/` (job/deploy/service mix) |
+
+---
+
+## Demo Checklist (showing the graders everything works)
+
+These are the exact commands we record when we need a fresh proof. Run them from
+`PROJECT_DIR` with the SSH tunnels up (`./start_tunnels.sh`) and the Ansible
+virtualenv activated. Each block notes what “good” output looks like.
+
+1. **Cluster health**
+   ```bash
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes"
+
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf get pods -A"
+   ```
+   *Expectation:* every node `Ready`; kube-system pods (kube-proxy, CoreDNS,
+   Flannel) reporting `Running`.
+2. **Pipeline pods & publisher jobs**
+   ```bash
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf get pods -n pipeline"
+
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf get jobs -n pipeline"
+   ```
+   *Expectation:* the consumer and Flask deployments show as `Running`; both
+   publisher jobs report `Completed 1/1`.
+3. **End-to-end data flow**
+   ```bash
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf logs -n pipeline deploy/consumer-svc --tail=10"
+
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf exec deploy/flask-web -n pipeline -- \
+      python -c \"import requests; print(requests.get('http://localhost:5000/last?n=5').text)\""
+   ```
+   *Expectation:* consumer log lines include `Flask POST ok (batch size=20)` and
+   the `/last` call returns fresh JSON documents from Mongo.
+4. **Manual scaling demo**
+   ```bash
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf scale deploy/consumer-svc -n pipeline --replicas=4"
+
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf scale deploy/flask-web -n pipeline --replicas=3"
+
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf get pods -n pipeline"
+
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf scale deploy/consumer-svc -n pipeline --replicas=2"
+
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf scale deploy/flask-web -n pipeline --replicas=2"
+
+   ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+     "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf get pods -n pipeline"
+   ```
+   *Expectation:* after scaling up you should see 4 consumer pods and 3 Flask
+   pods; after scaling back down they return to 2 each.
+
+If you need fresh publisher runs (e.g., you just rebooted and the Jobs already show `Completed`), redeploy them first:
+
+```bash
+ANSIBLE_LOCAL_TEMP=/tmp/ansible-local ANSIBLE_REMOTE_TEMP=/tmp \
+  ansible-playbook -i inventory.ini deploy_k8s_apps.yml
+```
 
 ---
 
@@ -27,7 +101,7 @@ pods can be redeployed end‑to‑end from our Ansible playbooks.
 
 1. **SSH tunnels**
    ```bash
-   cd /Users/laynetrautmann/Desktop/Cloud\ Computing/Pa1   # or your clone path
+   cd PROJECT_DIR
    ./start_tunnels.sh
    ```
 
@@ -51,7 +125,8 @@ pods can be redeployed end‑to‑end from our Ansible playbooks.
 
 ## Rebuild or Heal the Cluster (task c)
 
-Any time you need a fresh cluster (or after pulling new playbook changes):
+Run this when you want a clean control plane/worker set or after pulling major
+changes:
 
 ```bash
 ANSIBLE_LOCAL_TEMP=/tmp/ansible-local ANSIBLE_REMOTE_TEMP=/tmp \
@@ -68,23 +143,9 @@ workers. All nodes should report `Ready` within a minute and will show up as
 
 ---
 
-## What We Just Verified (simple version)
-
-1. **Cluster heal:** `install_docker_k8s.yml` → `configure_firewall.yml` (firewalld now disabled so kube-proxy stays up) → `setup_k8s_cluster.yml`.
-2. **Registry + images:** `setup_registry.yml`, then `build_push_images.yml` to rebuild publisher/consumer/flask and push `dev/latest`.
-3. **Deploy pipeline:** `deploy_k8s_apps.yml` applies namespace, ConfigMap, job, deployments, and service.
-4. **Smoke checks:**
-   - `kubectl get pods -n pipeline` shows 2× consumers, 2× flask pods Running, publisher job `Completed` once it times out at 180 s.
-   - `kubectl logs -n pipeline deploy/consumer-svc` prints `Flask POST ok (batch size=20)`.
-   - `kubectl exec -n pipeline deploy/flask-web -- python -c "…/last?n=5"` returns fresh documents from Mongo.
-
-If any pod restarts after a node hiccup, re-run steps 2–3 and the health checks.
-
----
-
 ## Private Registry & Image Build (tasks d/h/i)
 
-Run these whenever you need fresh images or want to validate the registry:
+Use this sequence to refresh images or validate the registry:
 
 ```bash
 # 1) make sure tunnels + virtualenv are active (see prerequisites above)
@@ -130,9 +191,46 @@ ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "kubectl --kubeconfig ~/.kube/config logs -n pipeline deploy/flask-web -f"
 ```
 
+## Manual publisher bursts & scaling demos (tasks e/f/g)
+
+The playbook now renders one manifest per publisher under
+`/tmp/pipeline-manifests/02-<job-name>.yaml`; the source list lives in
+`k8s/publisher-jobs.yml`. Duplicate the sample block there to add extra
+publishers (raise the `rate_multiplier`, change the `device_id`, etc.), then
+rerun the deploy playbook:
+
+```bash
+# edit k8s/publisher-jobs.yml locally first
+ansible-playbook -i inventory.ini deploy_k8s_apps.yml
+
+# start just the new publisher job without touching the rest (vm1):
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "kubectl --kubeconfig ~/.kube/config apply -f /tmp/pipeline-manifests/02-your-new-job.yaml"
+
+# watch the publisher pod(s) come up
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "kubectl --kubeconfig ~/.kube/config get pods -n pipeline -l app=publisher -w"
+```
+
+Scaling the long-running deployments is a manual `kubectl scale` away. These
+commands bump the subscribers to 4 replicas and the gunicorn frontends to 3:
+
+```bash
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "kubectl --kubeconfig ~/.kube/config scale deploy/consumer-svc -n pipeline --replicas=4"
+
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "kubectl --kubeconfig ~/.kube/config scale deploy/flask-web -n pipeline --replicas=3"
+```
+
+Re-run the same command with a different `--replicas` value to dial them back
+down. To make that the new default in the playbook, pass the counts as extra
+vars (for example,
+`ansible-playbook -i inventory.ini deploy_k8s_apps.yml -e consumer_replicas=4 -e flask_replicas=3`).
+
 ## Nice-to-have Follow-ups
 
-- **Flask runtime:** swap the built-in dev server for gunicorn/uwsgi so the pod no longer restarts after readiness probes (functionally optional).
+- **Gunicorn tuning:** adjust `GUNICORN_WORKERS`, `GUNICORN_ACCESS_LOG`, or `GUNICORN_ERROR_LOG` env vars in `deploy_k8s_apps.yml` if you need different concurrency/logging.
 - **Repo cleanup:** remove or ignore the large `docker/*-dev.tar.gz` archives if they are not needed.
 - **Logging polish:** quiet the consumer rebalance noise or lower Flask’s request logging if it gets chatty.
 ---

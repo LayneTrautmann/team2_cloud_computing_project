@@ -30,6 +30,12 @@ spec:
               value: "{{ mongo_uri }}"
             - name: MONGO_DB
               value: "{{ mongo_db }}"
+            - name: GUNICORN_WORKERS
+              value: "{{ flask_gunicorn_workers | default('2') }}"
+            - name: GUNICORN_ACCESS_LOG
+              value: "-"
+            - name: GUNICORN_ERROR_LOG
+              value: "-"
             # optional: make logs flush immediately (nicer in k8s)
             - name: PYTHONUNBUFFERED
               value: "1"

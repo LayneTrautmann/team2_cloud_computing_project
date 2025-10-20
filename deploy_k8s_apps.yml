@@ -11,12 +11,19 @@
     registry_host: "{{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}"
     registry: "{{ registry_host }}:{{ registry_port }}"
     image_tag: dev
-    publisher_job_name: publisher-job
-    publisher_device_id: publisher-job
-    publisher_source: k8s-job
-    publisher_log_every: 25
+    publisher_jobs_file: k8s/publisher-jobs.yml
+    publisher_jobs: "{{ (lookup('file', publisher_jobs_file) | from_yaml) | default([], true) }}"
     publisher_profile_file: k8s/publisher-profile.json
     publisher_profile_content: "{{ lookup('file', publisher_profile_file) }}"
+    publisher_defaults:
+      source: k8s-job
+      log_every: 25
+      topic_mode: shared
+      rate_multiplier: 1.0
+      key_strategy: sensor
+      duration_sec: 180
+      parallelism: 1
+      backoff_limit: 3
     consumer_deployment_name: consumer-svc
     consumer_replicas: 2
     consumer_topics: ["weather", "airquality", "power"]
@@ -27,9 +34,10 @@
     flask_service_name: flask-web
     flask_replicas: 2
     flask_container_port: 5000
+    flask_gunicorn_workers: 2
     flask_nodeport: 32000
     mongo_db: sensors
-    kafka_bootstrap: "{{ groups['kafka_broker'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '(.*)', '\\1:9092') | join(',') }}"
+    kafka_bootstrap: "{{ groups['kafka_broker'] | map('extract', hostvars, 'private_ip') | map('regex_replace', '^(.+)$', '\\1:9092') | join(',') }}"
     mongo_uri: "mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@{{ hostvars['team2_vm5'].private_ip }}:27017/{{ mongo_db }}?authSource={{ mongo_db }}"
     flask_service_internal_url: "http://{{ flask_service_name }}.{{ k8s_namespace }}.svc.cluster.local:{{ flask_container_port }}/update_data"
 
@@ -53,7 +61,24 @@
     - name: Render publisher job manifest
       template:
         src: templates/k8s/publisher-job.yaml.j2
-        dest: "{{ manifest_dir }}/02-publisher-job.yaml"
+        dest: "{{ manifest_dir }}/02-{{ item.name }}.yaml"
+      loop: "{{ publisher_jobs }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Collect publisher job manifest paths
+      set_fact:
+        publisher_job_manifests: "{{ (publisher_job_manifests | default([])) + [manifest_dir ~ '/02-' ~ item.name ~ '.yaml'] }}"
+      loop: "{{ publisher_jobs }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Recreate publisher jobs to avoid immutable template errors
+      command: kubectl delete job {{ item.name }} -n {{ k8s_namespace }} --ignore-not-found --kubeconfig /etc/kubernetes/admin.conf
+      loop: "{{ publisher_jobs }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: publisher_jobs | length > 0
 
     - name: Render consumer deployment manifest
       template:
@@ -70,12 +95,18 @@
         src: templates/k8s/flask-service.yaml.j2
         dest: "{{ manifest_dir }}/05-flask-service.yaml"
 
+    - name: Build manifest apply order
+      set_fact:
+        manifest_apply_order: >-
+          {{
+            [manifest_dir ~ '/00-namespace.yaml',
+             manifest_dir ~ '/01-publisher-profile.yaml'] +
+            (publisher_job_manifests | default([])) +
+            [manifest_dir ~ '/03-consumer-deployment.yaml',
+             manifest_dir ~ '/04-flask-deployment.yaml',
+             manifest_dir ~ '/05-flask-service.yaml']
+          }}
+
     - name: Apply Kubernetes manifests in order
       command: kubectl apply -f {{ item }} --kubeconfig /etc/kubernetes/admin.conf
-      loop:
-        - "{{ manifest_dir }}/00-namespace.yaml"
-        - "{{ manifest_dir }}/01-publisher-profile.yaml"
-        - "{{ manifest_dir }}/02-publisher-job.yaml"
-        - "{{ manifest_dir }}/03-consumer-deployment.yaml"
-        - "{{ manifest_dir }}/04-flask-deployment.yaml"
-        - "{{ manifest_dir }}/05-flask-service.yaml"
+      loop: "{{ manifest_apply_order }}"
