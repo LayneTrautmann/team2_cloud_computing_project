@@ -198,14 +198,17 @@
     - name: Regenerate containerd default configuration
       command: bash -c "containerd config default > /etc/containerd/config.toml"
 
-    - name: Remove stale containerd mirror block for local registry
-      blockinfile:
+    - name: Remove legacy containerd mirror block for local registry
+      replace:
         path: /etc/containerd/config.toml
-        marker: "# ANSIBLE MANAGED LOCAL REGISTRY {mark}"
-        block: |
-          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."{{ registry_endpoint }}"]
-            endpoint = ["http://{{ registry_endpoint }}"]
-        state: absent
+        regexp: '(?ms)^\s*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.registry\.mirrors\."{{ registry_endpoint }}"\]\n\s*endpoint = \["http://{{ registry_endpoint }}"\]\n'
+        replace: ''
+
+    - name: Remove legacy containerd registry TLS overrides for local registry
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: '(?ms)^\s*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.registry\.configs\."{{ registry_endpoint }}"\.tls\]\n\s*insecure_skip_verify = true\n'
+        replace: ''
 
     - name: Ensure containerd registry directory exists
       file:

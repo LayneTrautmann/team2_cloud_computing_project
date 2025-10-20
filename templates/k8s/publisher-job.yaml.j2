@@ -15,11 +15,11 @@ spec:
         - name: publisher
           image: {{ registry }}/publisher:{{ image_tag }}
           imagePullPolicy: Always
-          command: ["python3", "/app/publisher3.py"]
+          command: ["python3", "/app/publisher.py"]
           args:
             - "--brokers"
             - "{{ kafka_bootstrap }}"
-            - "--profile"
+            - "--config"
             - "/config/profile.json"
             - "--device-id"
             - "{{ publisher_device_id }}"
@@ -32,7 +32,7 @@ spec:
             - "--topic-mode"
             - "shared"             # or "per-sensor" for separate topics
             - "--rate-multiplier"
-            - "4.0"                # increases all sensors' rates by 4×
+            - "4.0"                # increases all sensors' rates by 4.0
             - "--key-strategy"
             - "sensor"             # message key: sensor | device | random
             - "--duration-sec"

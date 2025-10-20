@@ -10,7 +10,7 @@
     registry_port: 5000
     registry_host: "{{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}"
     registry: "{{ registry_host }}:{{ registry_port }}"
-    image_tag: latest
+    image_tag: dev
     publisher_job_name: publisher-job
     publisher_device_id: publisher-job
     publisher_source: k8s-job

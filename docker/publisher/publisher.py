@@ -19,6 +19,7 @@ PRESETS = {
     "air.pm25":              (   1.0, 150.0,   "µg/m³", lambda a,b: round(random.uniform(a,b), 1)),
     "air.co2":               ( 350.0, 2000.0,  "ppm",   lambda a,b: int(random.uniform(a,b))),
     "light.lux":             (   0.0, 20000.0, "lux",   lambda a,b: round(random.uniform(a,b), 0)),
+    "power.watts":           (  40.0,  800.0,  "W",     lambda a,b: round(random.uniform(a,b), 1)),
     "water.ph":              (   6.0,   9.0,   "pH",    lambda a,b: round(random.uniform(a,b), 2)),
     "water.turbidity_ntu":   (   0.1,  50.0,   "NTU",   lambda a,b: round(random.uniform(a,b), 2)),
     "water.temp_c":          (   4.0,  35.0,   "C",     lambda a,b: round(random.uniform(a,b), 2)),

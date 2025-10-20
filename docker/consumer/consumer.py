@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, Sequence, List
 import requests
 from requests.adapters import HTTPAdapter, Retry
 from kafka import KafkaConsumer
+from kafka.errors import KafkaConfigurationError
 
 # ---------- Helpers ----------
 def _parse_topics(raw: Optional[str]) -> Sequence[str]:
@@ -183,13 +184,18 @@ def main() -> int:
 
     try:
         consumer = KafkaConsumer(**consumer_kwargs)
-    except TypeError:
+    except (TypeError, KafkaConfigurationError):
         # fallback (older kafka-python missing some kwargs)
         for k in ("partition_assignment_strategy", "group_instance_id"):
             consumer_kwargs.pop(k, None)
         consumer = KafkaConsumer(**consumer_kwargs)
 
     if KAFKA_TOPIC_PATTERN:
+        if KAFKA_TOPICS:
+            log.info(
+                "Topic pattern provided; ignoring static topic list %s",
+                KAFKA_TOPICS,
+            )
         consumer.subscribe(pattern=KAFKA_TOPIC_PATTERN)
     else:
         consumer.subscribe(topics=KAFKA_TOPICS)

@@ -66,8 +66,10 @@
         tag: "{{ image_tag }}"
         push: true
         source: build
+        force_source: true
         build:
           path: "{{ build_root }}/{{ item.context }}"
+          nocache: true
       loop: "{{ components }}"
 
     - name: Also tag & push 'latest' for convenience
