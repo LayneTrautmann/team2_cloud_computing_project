@@ -15,6 +15,7 @@ spec:
       labels:
         app: consumer
     spec:
+      terminationGracePeriodSeconds: 10
       containers:
         - name: consumer
           image: {{ registry }}/consumer:{{ image_tag }}
@@ -22,10 +23,12 @@ spec:
           env:
             - name: KAFKA_BOOTSTRAP
               value: "{{ kafka_bootstrap }}"
-            - name: KAFKA_TOPICS
-              value: "{{ consumer_topics | join(',') }}"
+
+            # Use explicit in-cluster DNS + path the consumer posts to
+            # (If your {{ flask_service_internal_url }} already includes /update_data, you can swap this back in.)
             - name: FLASK_URL
-              value: "{{ flask_service_internal_url }}"
+              value: "http://{{ flask_service_name }}.{{ k8s_namespace }}.svc.cluster.local:{{ flask_container_port }}/update_data"
+
             - name: POST_TIMEOUT
               value: "{{ consumer_post_timeout }}"
             - name: POST_BACKOFF_SEC
@@ -33,20 +36,26 @@ spec:
             - name: KAFKA_GROUP_ID
               value: "{{ consumer_group_id }}"
 
-            # ??? Add these for PA2 (f): pattern matching, batching, and scaling
+            # Pattern-based subscription to shared + per-sensor topics
             - name: KAFKA_TOPIC_PATTERN
-              value: "^(?:sensors|weather|airquality|power|weather\\.|air\\.|water\\.|light\\.|sys\\.)"
-              # Match shared pipeline topics plus any namespace fan-out by prefix
+              value: "^(?:sensors$|weather$|airquality$|power$|weather\\.|air\\.|water\\.|light\\.|sys\\.)"
+
             - name: KAFKA_AUTO_OFFSET_RESET
               value: "latest"
+
+            # Static membership id (note: with a Deployment pod names change on rollout)
             - name: KAFKA_INSTANCE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-              # Unique consumer identity (lets K8s replicas join same group)
+
+            # ? Now that /bulk_update exists, turn batching back on
             - name: POST_BATCH_SIZE
               value: "20"
-              # Number of messages to batch per POST (useful for scaling)
+
             - name: FLASK_URL_BULK
               value: "http://{{ flask_service_name }}.{{ k8s_namespace }}.svc.cluster.local:{{ flask_container_port }}/bulk_update"
-              # Optional: If you extend Flask to handle bulk inserts later
+
+            # Optional: documents intent (consumer.py already keys off presence of pattern)
+            - name: CONSUME_MODE
+              value: "pattern"
