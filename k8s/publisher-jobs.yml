@@ -8,7 +8,7 @@
   topic_mode: shared
   rate_multiplier: 4.0
   key_strategy: sensor
-  duration_sec: 180
+  duration_sec: 900
   parallelism: 1
 - name: publisher-job-extra
   device_id: publisher-extra
@@ -17,5 +17,6 @@
   topic_mode: shared
   rate_multiplier: 2.0
   key_strategy: sensor
-  duration_sec: 120
+  duration_sec: 900
   parallelism: 1
+
