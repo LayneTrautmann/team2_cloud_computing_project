@@ -75,7 +75,7 @@ python3 publisher.py \
   --brokers 192.168.5.21:9092,192.168.5.70:9092 \
   --config ./profile.json \
   --topic-mode shared \
-  --topic random \
+  --topic sensors \
   --device-id device-imran \
   --source laptop-imran \
   --key-strategy random \
@@ -91,7 +91,7 @@ python3 publisher.py \
   --brokers 192.168.5.21:9092,192.168.5.70:9092 \
   --config ./profile.json \
   --topic-mode shared \
-  --topic random \
+  --topic sensors \
   --device-id device-layne \
   --source laptop-layne \
   --key-strategy random \
