@@ -7,6 +7,9 @@
   vars:
     docker_gpg_dest: /etc/apt/keyrings/docker.gpg
     docker_apt_repo: "deb [arch=amd64 signed-by={{ docker_gpg_dest }}] https://download.docker.com/linux/ubuntu {{ ansible_facts.distribution_release }} stable"
+    iptables_alternatives:
+      - { name: iptables, target: /usr/sbin/iptables-legacy }
+      - { name: ip6tables, target: /usr/sbin/ip6tables-legacy }
     docker_packages:
       - docker-ce
       - docker-ce-cli
@@ -38,6 +41,7 @@
         content: |
           overlay
           br_netfilter
+          nf_conntrack
         mode: "0644"
 
     - name: Load required kernel modules now
@@ -47,6 +51,7 @@
       loop:
         - overlay
         - br_netfilter
+        - nf_conntrack
 
     - name: Configure Kubernetes sysctl parameters
       copy:
@@ -55,6 +60,8 @@
           net.bridge.bridge-nf-call-iptables  = 1
           net.bridge.bridge-nf-call-ip6tables = 1
           net.ipv4.ip_forward                 = 1
+          net.ipv4.conf.all.rp_filter         = 0
+          net.ipv4.conf.default.rp_filter     = 0
         mode: "0644"
 
     - name: Apply sysctl parameters
@@ -71,6 +78,24 @@
         path: /etc/fstab
         regexp: '^(\s*[^#\s]+\s+[^#\s]+\s+swap\s+.*)$'
         replace: '# \1'
+
+    - name: Check current iptables alternatives target
+      command: "readlink -f /etc/alternatives/{{ item.name }}"
+      register: current_alt
+      loop: "{{ iptables_alternatives }}"
+      changed_when: false
+      failed_when: false
+      when: ansible_facts.os_family == "Debian"
+
+    - name: Switch netfilter tools to legacy backend
+      command: "update-alternatives --set {{ item.name }} {{ item.target }}"
+      loop: "{{ iptables_alternatives }}"
+      loop_control:
+        index_var: alt_idx
+      when:
+        - ansible_facts.os_family == "Debian"
+        - current_alt.results[alt_idx].rc == 0
+        - current_alt.results[alt_idx].stdout | trim != item.target
 
     - name: Ensure keyrings directory exists
       file:
@@ -149,12 +174,6 @@
       args:
         creates: /etc/containerd/config.toml
 
-    - name: Ensure containerd uses systemd cgroups
-      replace:
-        path: /etc/containerd/config.toml
-        regexp: 'SystemdCgroup = false'
-        replace: 'SystemdCgroup = true'
-
     - name: Configure Docker daemon defaults
       copy:
         dest: /etc/docker/daemon.json
@@ -169,6 +188,56 @@
             "storage-driver": "overlay2",
             "insecure-registries": ["{{ registry_endpoint }}"]
           }
+
+    - name: Regenerate containerd default configuration
+      command: bash -c "containerd config default > /etc/containerd/config.toml"
+
+    - name: Set containerd sandbox image to pause 3.10.1
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*sandbox_image = ".*"$'
+        replace: '    sandbox_image = "registry.k8s.io/pause:3.10.1"'
+
+    - name: Enable containerd SystemdCgroup support
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup = false$'
+        replace: '            SystemdCgroup = true'
+
+    - name: Remove legacy containerd mirror block for local registry
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: '(?ms)^\s*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.registry\.mirrors\."{{ registry_endpoint }}"\]\n\s*endpoint = \["http://{{ registry_endpoint }}"\]\n'
+        replace: ''
+
+    - name: Remove legacy containerd registry TLS overrides for local registry
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: '(?ms)^\s*\[plugins\."io\.containerd\.grpc\.v1\.cri"\.registry\.configs\."{{ registry_endpoint }}"\.tls\]\n\s*insecure_skip_verify = true\n'
+        replace: ''
+
+    - name: Ensure containerd registry directory exists
+      file:
+        path: "/etc/containerd/certs.d/{{ registry_endpoint }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure containerd registry config path uses certs.d
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*config_path\s*='
+        line: '      config_path = "/etc/containerd/certs.d"'
+        insertafter: '^\[plugins."io.containerd.grpc.v1.cri".registry\]'
+        firstmatch: true
+
+    - name: Configure containerd hosts.toml for local registry
+      copy:
+        dest: "/etc/containerd/certs.d/{{ registry_endpoint }}/hosts.toml"
+        mode: "0644"
+        content: |
+          server = "http://{{ registry_endpoint }}"
+          [host."http://{{ registry_endpoint }}"]
+            capabilities = ["pull", "resolve"]
 
     - name: Download Kubernetes apt key
       get_url:

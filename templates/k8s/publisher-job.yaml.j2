@@ -1,32 +1,83 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ publisher_job_name }}
+  name: {{ item.name }}
   namespace: {{ k8s_namespace }}
 spec:
-  backoffLimit: 3
+  backoffLimit: {{ item.backoff_limit | default(publisher_defaults.backoff_limit) }}
+{% if item.parallelism is defined %}
+  parallelism: {{ item.parallelism }}
+{% elif publisher_defaults.parallelism is defined %}
+  parallelism: {{ publisher_defaults.parallelism }}
+{% endif %}
+{% if item.completions is defined %}
+  completions: {{ item.completions }}
+{% endif %}
+{% if item.ttl_seconds_after_finished is defined %}
+  ttlSecondsAfterFinished: {{ item.ttl_seconds_after_finished }}
+{% endif %}
+{% if item.active_deadline_seconds is defined %}
+  activeDeadlineSeconds: {{ item.active_deadline_seconds }}
+{% endif %}
   template:
     metadata:
       labels:
         app: publisher
+        publisher-name: {{ item.name }}
     spec:
       restartPolicy: Never
       containers:
         - name: publisher
           image: {{ registry }}/publisher:{{ image_tag }}
           imagePullPolicy: Always
-          command: ["python", "/app/publisher.py"]
+          command: ["python3", "/app/publisher.py"]
           args:
             - "--brokers"
             - "{{ kafka_bootstrap }}"
-            - "--profile"
-            - "/config/profile.json"
+            - "--config"
+            - "{{ item.config_path | default('/config/profile.json') }}"
             - "--device-id"
-            - "{{ publisher_device_id }}"
+            - "{{ item.device_id }}"
             - "--source"
-            - "{{ publisher_source }}"
+            - "{{ item.source | default(publisher_defaults.source) }}"
             - "--log-every"
-            - "{{ publisher_log_every }}"
+            - "{{ item.log_every | default(publisher_defaults.log_every) }}"
+            - "--topic-mode"
+            - "{{ item.topic_mode | default(publisher_defaults.topic_mode) }}"
+{% if item.rate_multiplier is defined or (publisher_defaults.rate_multiplier is defined and publisher_defaults.rate_multiplier != 1.0) %}
+            - "--rate-multiplier"
+            - "{{ item.rate_multiplier | default(publisher_defaults.rate_multiplier) }}"
+{% endif %}
+{% if item.key_strategy is defined or (publisher_defaults.key_strategy is defined and publisher_defaults.key_strategy != 'sensor') %}
+            - "--key-strategy"
+            - "{{ item.key_strategy | default(publisher_defaults.key_strategy) }}"
+{% endif %}
+{% if item.duration_sec is defined %}
+            - "--duration-sec"
+            - "{{ item.duration_sec }}"
+{% elif publisher_defaults.duration_sec is defined %}
+            - "--duration-sec"
+            - "{{ publisher_defaults.duration_sec }}"
+{% endif %}
+{% if item.max_messages is defined %}
+            - "--max-messages"
+            - "{{ item.max_messages }}"
+{% endif %}
+{% if item.create_topic is defined and item.create_topic %}
+            - "--create-topic"
+{% if item.topic_partitions is defined %}
+            - "--partitions"
+            - "{{ item.topic_partitions }}"
+{% endif %}
+{% if item.topic_replication_factor is defined %}
+            - "--replication-factor"
+            - "{{ item.topic_replication_factor }}"
+{% endif %}
+{% if item.topic_api_version is defined %}
+            - "--api-version"
+            - "{{ item.topic_api_version }}"
+{% endif %}
+{% endif %}
           volumeMounts:
             - name: publisher-profile
               mountPath: /config

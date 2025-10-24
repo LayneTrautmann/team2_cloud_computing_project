@@ -1,0 +1,22 @@
+---
+# Each entry defines a Kubernetes Job that runs a publisher instance.
+# Duplicate a block and tweak the name, device_id, or rate multiplier to add more publishers.
+- name: publisher-job
+  device_id: publisher-job
+  source: k8s-job
+  log_every: 25
+  topic_mode: shared
+  rate_multiplier: 4.0
+  key_strategy: sensor
+  duration_sec: 900
+  parallelism: 1
+- name: publisher-job-extra
+  device_id: publisher-extra
+  source: k8s-job
+  log_every: 50
+  topic_mode: shared
+  rate_multiplier: 2.0
+  key_strategy: sensor
+  duration_sec: 900
+  parallelism: 1
+

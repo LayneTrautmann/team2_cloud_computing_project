@@ -9,5 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY flask_server.py .
+COPY entrypoint.sh .
+RUN chmod +x /app/entrypoint.sh
 
-ENTRYPOINT ["python", "/app/flask_server.py"]
+ENTRYPOINT ["/app/entrypoint.sh"]

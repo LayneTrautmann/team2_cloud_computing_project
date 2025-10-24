@@ -1,8 +1,26 @@
 ---
 - name: Provision local Docker registry on Kubernetes master
-  hosts: "{{ groups['kafka_broker'][0] }}"
+  hosts: "kafka_broker[0]"
   become: true
   gather_facts: yes
+
+  pre_tasks:
+    - name: Ensure Docker Python SDK is present
+      package:
+        name: python3-docker
+        state: present
+
+    - name: Check if Docker service unit exists
+      stat:
+        path: /lib/systemd/system/docker.service
+      register: docker_unit
+
+    - name: Ensure Docker service is running (if present)
+      systemd:
+        name: docker
+        state: started
+        enabled: true
+      when: docker_unit.stat.exists
 
   vars:
     registry_port: 5000
@@ -10,6 +28,12 @@
     registry_data_dir: /opt/registry/data
 
   tasks:
+    - name: Ensure registry parent directory exists
+      file:
+        path: "{{ registry_data_dir | dirname }}"
+        state: directory
+        mode: "0755"
+
     - name: Ensure registry data directory exists
       file:
         path: "{{ registry_data_dir }}"
@@ -27,11 +51,23 @@
         image: registry:2
         state: started
         restart_policy: always
+        env:
+          REGISTRY_HTTP_ADDR: "0.0.0.0:5000"
         published_ports:
           - "{{ registry_port }}:5000"
         volumes:
           - "{{ registry_data_dir }}:/var/lib/registry"
 
+    - name: Wait for registry API to respond
+      uri:
+        url: "http://localhost:{{ registry_port }}/v2/_catalog"
+        status_code: 200
+        return_content: true
+      register: reg_ping
+      retries: 15
+      delay: 2
+      until: reg_ping.status == 200
+
     - name: Show registry endpoint
       debug:
-        msg: "Private registry available at {{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}:{{ registry_port }}"
+        msg: "Private registry available at {{ hostvars[inventory_hostname].private_ip | default(hostvars[inventory_hostname].ansible_host | default(ansible_default_ipv4.address)) }}:{{ registry_port }}"

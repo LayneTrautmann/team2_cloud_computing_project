@@ -60,6 +60,8 @@ rules:
       - get
       - list
       - watch
+      - patch
+      - update
   - apiGroups: ["networking.k8s.io"]
     resources:
       - clustercidrs

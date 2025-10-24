@@ -1,0 +1,73 @@
+---
+- name: Open kubelet/logging/NodePort ports in tenant SGs
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    cloud_name: "{{ lookup('env','OS_CLOUD') | default('CH-822922') }}"
+    network_name: "CH-822922-net"
+    # the SGs you used when creating the VMs
+    target_sgs:
+      - "ENABLE_KAFKA"
+      - "ENABLE_CUSTOM_SERVICE"
+
+  tasks:
+    - name: Lookup tenant IPv4 CIDR for {{ network_name }}
+      openstack.cloud.networks_info:
+        cloud: "{{ cloud_name }}"
+        name: "{{ network_name }}"
+      register: netinfo
+
+    - name: Lookup IPv4 subnets
+      openstack.cloud.subnets_info:
+        cloud: "{{ cloud_name }}"
+        filters:
+          network_id: "{{ netinfo.networks[0].id }}"
+          ip_version: 4
+      register: subinfo
+
+    - name: Set tenant_cidr
+      set_fact:
+        tenant_cidr: "{{ subinfo.subnets[0].cidr }}"
+
+    # --- Required for kubectl logs/exec/attach ---
+    - name: Allow kubelet 10250/tcp within tenant
+      openstack.cloud.security_group_rule:
+        cloud: "{{ cloud_name }}"
+        security_group: "{{ item }}"
+        protocol: tcp
+        port_range_min: 10250
+        port_range_max: 10250
+        remote_ip_prefix: "{{ tenant_cidr }}"
+        direction: ingress
+        ether_type: IPv4
+      loop: "{{ target_sgs }}"
+
+    # --- (Optional) NodePort range if you plan to use NodePort services ---
+    - name: Allow NodePort 30000-32767/tcp within tenant
+      openstack.cloud.security_group_rule:
+        cloud: "{{ cloud_name }}"
+        security_group: "{{ item }}"
+        protocol: tcp
+        port_range_min: 30000
+        port_range_max: 32767
+        remote_ip_prefix: "{{ tenant_cidr }}"
+        direction: ingress
+        ether_type: IPv4
+      loop: "{{ target_sgs }}"
+      ignore_errors: yes
+
+    # --- (Optional) Flannel VXLAN (usually OK already, but safe to add) ---
+    - name: Allow Flannel VXLAN 8472/udp within tenant
+      openstack.cloud.security_group_rule:
+        cloud: "{{ cloud_name }}"
+        security_group: "{{ item }}"
+        protocol: udp
+        port_range_min: 8472
+        port_range_max: 8472
+        remote_ip_prefix: "{{ tenant_cidr }}"
+        direction: ingress
+        ether_type: IPv4
+      loop: "{{ target_sgs }}"
+      ignore_errors: yes

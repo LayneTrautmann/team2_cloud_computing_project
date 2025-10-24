@@ -1,60 +1,95 @@
 ---
-- name: Build and push pipeline Docker images to private registry
-  hosts: "{{ groups['kafka_broker'][0] }}"
+- name: Build and push pipeline Docker images to private registry (task d)
+  hosts: "kafka_broker[0]"  # vm1 / control-plane with the registry
   become: true
   gather_facts: yes
 
   vars:
+    # Push to the registry running on vm1 (listening on 0.0.0.0:5000)
     registry_port: 5000
-    registry_host: "{{ hostvars[inventory_hostname].private_ip | default(ansible_default_ipv4.address) }}"
+    registry_host: "{{ hostvars[groups['kafka_broker'][0]].private_ip | default(hostvars[groups['kafka_broker'][0]].ansible_host | default(ansible_default_ipv4.address)) }}"
     registry: "{{ registry_host }}:{{ registry_port }}"
-    image_tag: latest
-    build_root: /opt/pipeline-images
+
+
+    # Default tag for builds (override with: -e image_tag=latest or a git SHA)
+    image_tag: "dev"
+
+    # Where your docker/ folder lives on the CONTROL NODE (your laptop/WSL)
+    src_root: "{{ playbook_dir }}/docker"
+
+    # Where to stage build contexts on vm1
+    build_root: "/opt/pipeline-images"
+
+    # Components to build (paths are relative to docker/)
     components:
-      - name: publisher
-        context: docker/publisher
-        script: publisher.py
-      - name: consumer
-        context: docker/consumer
-        script: consumer.py
-      - name: flask
-        context: docker/flask
-        script: flask_server.py
+      - { name: publisher, context: "publisher", script: "publisher.py" }
+      - { name: consumer,  context: "consumer",  script: "consumer.py"   }
+      - { name: flask,     context: "flask",     script: "flask_server.py" }
+
+  pre_tasks:
+    - name: Ensure rsync is installed for synchronize
+      package:
+        name: rsync
+        state: present
+
+    - name: Ensure Docker Python SDK is present
+      package:
+        name: python3-docker
+        state: present
 
   tasks:
-    - name: Ensure build root exists
+    - name: Ensure build root exists on vm1
       file:
         path: "{{ build_root }}"
         state: directory
         mode: "0755"
+        
+    - name: Copy Docker build contexts from control node to vm1
+      copy:
+        src: "{{ src_root }}/"
+        dest: "{{ build_root }}/"
+        mode: "0644"
 
-    - name: Prepare build context for each component
-      block:
-        - name: Ensure context directory exists
-          file:
-            path: "{{ build_root }}/{{ item.name }}"
-            state: directory
-            mode: "0755"
-
-        - name: Copy Docker context files (Dockerfile + requirements)
-          copy:
-            src: "{{ item.context }}/"
-            dest: "{{ build_root }}/{{ item.name }}/"
-            mode: "0644"
-
-        - name: Copy application source into build context
-          copy:
-            src: "{{ item.script }}"
-            dest: "{{ build_root }}/{{ item.name }}/{{ item.script | basename }}"
-            mode: "0644"
+    # Optional safety: ensure the main app script exists at the expected name inside the context
+    # (Keep if your Dockerfiles COPY a specific filename; harmless if already there.)
+    - name: Ensure primary app scripts exist at expected names
+      copy:
+        src: "{{ src_root }}/{{ item.context }}/{{ item.script }}"
+        dest: "{{ build_root }}/{{ item.context }}/{{ item.script | basename }}"
+        mode: "0644"
       loop: "{{ components }}"
+      when: item.script is defined
 
-    - name: Build and push images to registry
+    - name: Build and push images to vm1 registry
       community.docker.docker_image:
         name: "{{ registry }}/{{ item.name }}"
         tag: "{{ image_tag }}"
         push: true
         source: build
+        force_source: true
         build:
-          path: "{{ build_root }}/{{ item.name }}"
+          path: "{{ build_root }}/{{ item.context }}"
+          nocache: true
       loop: "{{ components }}"
+
+    - name: Also tag & push 'latest' for convenience
+      community.docker.docker_image:
+        name: "{{ registry }}/{{ item.name }}"
+        repository: "{{ registry }}/{{ item.name }}"
+        tag: "latest"
+        source: local
+        push: true
+      loop: "{{ components }}"
+      when: image_tag != 'latest'
+
+    - name: Verify tags in registry
+      uri:
+        url: "http://localhost:5000/v2/{{ item.name }}/tags/list"
+        return_content: true
+      register: reg_tags
+      loop: "{{ components }}"
+
+    - name: Show registry tag results
+      debug:
+        msg: "{{ item.item.name }} -> {{ item.content }}"
+      loop: "{{ reg_tags.results }}"

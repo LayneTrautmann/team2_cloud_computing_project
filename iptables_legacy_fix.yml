@@ -1,0 +1,62 @@
+---
+- name: Switch to iptables-legacy and set node networking
+  hosts: kafka_cluster
+  become: true
+  gather_facts: no
+  tasks:
+    - name: iptables -> legacy
+      command: update-alternatives --set iptables /usr/sbin/iptables-legacy
+    - name: ip6tables -> legacy
+      command: update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+    - name: arptables -> legacy (if present)
+      command: update-alternatives --set arptables /usr/sbin/arptables-legacy
+      failed_when: false
+    - name: ebtables -> legacy (if present)
+      command: update-alternatives --set ebtables /usr/sbin/ebtables-legacy
+      failed_when: false
+
+    - name: Ensure nf_conntrack loaded now
+      modprobe:
+        name: nf_conntrack
+        state: present
+
+    - name: Persist modules across reboots
+      copy:
+        dest: /etc/modules-load.d/k8s-net.conf
+        mode: "0644"
+        content: |
+          br_netfilter
+          nf_conntrack
+
+    - name: Overlay-safe sysctls (rp_filter=0 etc.)
+      copy:
+        dest: /etc/sysctl.d/98-k8s-overlay.conf
+        mode: "0644"
+        content: |
+          net.ipv4.ip_forward = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.conf.all.rp_filter = 0
+          net.ipv4.conf.default.rp_filter = 0
+
+    - name: Apply sysctl
+      command: sysctl --system
+      changed_when: false
+
+- name: Restart kube-proxy and CoreDNS
+  hosts: "{{ groups['kafka_broker'][0] }}"   # vm1
+  become: true
+  gather_facts: no
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Restart kube-proxy
+      command: kubectl -n kube-system rollout restart ds/kube-proxy --kubeconfig {{ kubeconfig }}
+    - name: Wait for kube-proxy
+      command: kubectl -n kube-system rollout status ds/kube-proxy --timeout=180s --kubeconfig {{ kubeconfig }}
+      changed_when: false
+    - name: Restart CoreDNS
+      command: kubectl -n kube-system rollout restart deploy/coredns --kubeconfig {{ kubeconfig }}
+    - name: Wait for CoreDNS
+      command: kubectl -n kube-system rollout status deploy/coredns --timeout=120s --kubeconfig {{ kubeconfig }}
+      changed_when: false

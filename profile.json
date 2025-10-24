@@ -1,0 +1,12 @@
+{
+  "sensors": [
+    { "name": "weather.temp_c", "hz": 2.0, "burst": 1 },
+    { "name": "weather.humidity_pct", "hz": 1.0, "burst": 1 },
+    { "name": "air.pm25", "hz": 0.5, "burst": 1 },
+    { "name": "air.co2", "hz": 0.5, "burst": 1 },
+    { "name": "power.watts", "hz": 0.2, "burst": 1 },
+    { "name": "light.lux", "hz": 5.0, "burst": 1 },
+    { "name": "water.ph", "hz": 0.1, "burst": 1 }
+  ]
+}
+
