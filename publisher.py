@@ -154,6 +154,7 @@ def parse_args():
                     help="Optional RNG seed for reproducibility")
     ap.add_argument("--key-strategy", choices=["sensor", "device", "random"], default=os.getenv("KEY_STRATEGY","sensor"),
                     help="Kafka message key to influence partitioning")
+    ap.add_argument("--input", help="Path to CSV file")
     return ap.parse_args()
 
 def main():
@@ -179,6 +180,13 @@ def main():
             SensorConfig("water.ph", hz=0.1, burst=1),
         ]
 
+    
+    acks_arg = args.acks
+    if acks_arg == "0":
+        acks_arg = 0
+    elif acks_arg == "1":
+        acks_arg = 1
+
     # Ensure topics:
     if args.create_topic:
         if args.topic_mode == "shared":
@@ -196,8 +204,12 @@ def main():
         api_version=args.api_version,
     )
 
-    print(f"[start] brokers={brokers} topic_mode={args.topic_mode}")
-    print(f"[start] sensors={[s.name for s in sensors_cfg]} device_id={args.device_id}")
+
+    print(f"[start] brokers={brokers} topic={args.topic} topic_mode={args.topic_mode}")
+    if args.input:
+        print(f"[start] mode=csv file={args.input} device_id={args.device_id}")
+    else:
+        print(f"[start] mode=synthetic sensors={[s.name for s in sensors_cfg]} device_id={args.device_id}")
 
     # counters & stop conditions
     sent_total = 0
@@ -209,6 +221,36 @@ def main():
         eff_hz = max(0.001, s.hz * max(0.001, args.rate_multiplier))
         periods[s.name] = 1.0 / eff_hz
     next_due = {s.name: time.time() for s in sensors_cfg}
+
+    # Using New Publisher Data
+    if args.input:
+        import csv, uuid
+        print(f"[csv] replaying {args.input}")
+        with open(args.input, newline="") as f:
+            r = csv.reader(f)
+            count = 0
+            for rid, ts, val, prop, plug, hh, house in r:
+                payload = {
+                    "id": rid,
+                    "timestamp": ts,
+                    "value": float(val),
+                    "property": int(prop),
+                    "plug_id": int(plug),
+                    "household_id": int(hh),
+                    "house_id": int(house),
+                    "device_id": args.device_id,
+                    "source": args.source,
+                }
+                key = f"{payload['house_id']}-{payload['household_id']}-{payload['plug_id']}"
+                topic = args.topic if args.topic_mode == "shared" else "debs"
+                producer.send(topic, key=key, value=payload)
+                count += 1
+                if args.max_messages > 0 and count >= args.max_messages:
+                    break
+        producer.flush()
+        producer.close(60) 
+        print("[csv] done")
+        return
 
     try:
         while True:
@@ -258,7 +300,8 @@ def main():
         print("\n[stop] closing producer...")
     finally:
         try:
-            producer.flush(10)
+            producer.flush()
+            producer.close(60)
         except KafkaError as e:
             print(f"[stop] flush error: {e}", file=sys.stderr)
 

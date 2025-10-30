@@ -12,3 +12,4 @@ scratch/
 
 # Ansible temporary dirs
 .ansible/
+data/*.csv

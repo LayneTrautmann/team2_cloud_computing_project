@@ -1,38 +1,60 @@
-Here’s a clean, **full drop-in README** with all your requested updates and the rest left intact.
 
 ---
+## PA3 running publishers
 
-# PA2 K8s Deployment – Current Status
+# run once per terminal
+export BROKERS="127.0.0.1:29091,127.0.0.1:29092"
+export TOPIC="debs-sensors"
 
-This repository contains the automation and application code we used to bring up
-the PA2 data pipeline. Docker/Kubernetes bootstrap (tasks a–c) is stable, the
-private registry plus image rollout (task d/h/i) is in place, and the pipeline
-pods can be redeployed end-to-end from our Ansible playbooks.
+# Imran runs 3 publishers
+python3 publisher.py \
+  --brokers "$BROKERS" \
+  --input data/shard1.csv \
+  --topic "$TOPIC" --topic-mode shared \
+  --acks all --create-topic \
+  --partitions 5 --replication-factor 1 \
+  --device-id device-imran --source laptop-imran \
+  --log-every 10000
 
-All paths below assume you are inside the project directory (for example,
-`PROJECT_DIR=~/cloud-pa2`). Replace `~/.ssh/team2_key.pem` with your key path if
-it differs. The commands work the same on macOS, Linux, or Windows (use Git Bash
-or WSL so that `ssh`, `kubectl`, and `ansible-playbook` are available).
+python3 publisher.py \
+  --brokers "$BROKERS" \
+  --input data/shard2.csv \
+  --topic "$TOPIC" --topic-mode shared \
+  --acks all \
+  --device-id device-imran --source laptop-imran \
+  --log-every 10000
 
----
+python3 publisher.py \
+  --brokers "$BROKERS" \
+  --input data/shard3.csv \
+  --topic "$TOPIC" --topic-mode shared \
+  --acks all \
+  --device-id device-imran --source laptop-imran \
+  --log-every 10000
 
-## Quick Summary
 
-| Task                                 | Status | Notes                                                                                                                     |
-| ------------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------- |
-| (a) Docker & K8s install via Ansible | ✅      | `install_docker_k8s.yml` run on vm1–vm5                                                                                   |
-| (b) Firewall updates                 | ✅      | `configure_firewall.yml` applied                                                                                          |
-| (c) K8s cluster creation             | ✅      | `setup_k8s_cluster.yml` stages CNI dirs, applies Flannel, joins workers; cluster verified `Ready`                         |
-| (d) Docker images & K8s deploy       | ✅      | Build + push publisher/consumer/flask images, roll out via K8s                                                            |
-| (e) Extend publisher logic           | ✅      | Implemented in `./publisher.py`; generates multi-sensor data, configurable rate and duration             |
-| (f) Extend subscriber logic          | ✅      | Implemented in `./docker/consumer/consumer.py`; supports regex topic fan-out, batching, and scaling                       |
-| (g) Extend Flask web server          | ✅      | Implemented in `./docker/flask/flask_server.py`; supports `/bulk_update`, `/readyz`, `/healthz`, `/last`, behind gunicorn |
-| (h) Private registry                 | ✅      | Local registry on vm1 (`setup_registry.yml`)                                                                              |
-| (i) K8s YAML layout                  | ✅      | Templates under `templates/k8s/` (job/deploy/service mix)                                                                 |
+# Layne runs 2 publishers
+python3 publisher.py \
+  --brokers "$BROKERS" \
+  --input data/shard4.csv \
+  --topic "$TOPIC" --topic-mode shared \
+  --acks all \
+  --device-id device-layne --source laptop-layne \
+  --log-every 10000
 
----
+python3 publisher.py \
+  --brokers "$BROKERS" \
+  --input data/shard5.csv \
+  --topic "$TOPIC" --topic-mode shared \
+  --acks all \
+  --device-id device-layne --source laptop-layne \
+  --log-every 10000
 
-## Demo Checklist (showing the graders everything works)
+
+
+
+
+## PA2 Demo Checklist (showing the graders everything works)
 
 These are the exact commands we record when we need a fresh proof. Run them from
 `PROJECT_DIR` with the SSH tunnels up (`./start_tunnels.sh`) and the Ansible
@@ -389,14 +411,6 @@ Re-run the same command with a different `--replicas` value to dial them back
 down. To make that the new default in the playbook, pass the counts as extra
 vars (for example,
 `ansible-playbook -i inventory.ini deploy_k8s_apps.yml -e consumer_replicas=4 -e flask_replicas=3`).
-
----
-
-## Nice-to-have Follow-ups
-
-* **Gunicorn tuning:** adjust `GUNICORN_WORKERS`, `GUNICORN_ACCESS_LOG`, or `GUNICORN_ERROR_LOG` env vars in `deploy_k8s_apps.yml` if you need different concurrency/logging.
-* **Repo cleanup:** remove or ignore the large `docker/*-dev.tar.gz` archives if they are not needed.
-* **Logging polish:** quiet the consumer rebalance noise or lower Flask’s request logging if it gets chatty.
 
 ---
 
