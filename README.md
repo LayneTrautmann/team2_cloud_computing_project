@@ -51,6 +51,22 @@ python3 publisher.py \
   --log-every 10000
 
 
+# Now show mongo shard count
+ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "mongosh mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@localhost:27017/sensors?authSource=sensors \
+     --eval 'db.getCollectionNames().filter(n=>n.startsWith(\"readings_shard\")).map(n=>({n,count:db[n].countDocuments()}))'"
+
+
+# Show the latest records (e.g.sensorType":"33-5-2" corresponds to house 33, household 5, plug 2.)
+ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf exec deploy/flask-web -n pipeline -- \
+   python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5000/last?n=5').read().decode())\""
+
+# Can show schema
+ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
+  "mongosh mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@localhost:27017/sensors?authSource=sensors \
+     --eval 'db.readings_shard1.find({source:\"laptop-layne\"}).sort({_id:-1}).limit(1)'"
+
 
 
 

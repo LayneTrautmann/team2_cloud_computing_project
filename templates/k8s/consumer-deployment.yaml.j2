@@ -38,7 +38,7 @@ spec:
 
             # Pattern-based subscription to shared + per-sensor topics
             - name: KAFKA_TOPIC_PATTERN
-              value: "^(?:sensors$|weather$|airquality$|power$|weather\\.|air\\.|water\\.|light\\.|sys\\.)"
+              value: "^(?:debs-sensors$|sensors$|weather$|airquality$|power$|weather\\.|air\\.|water\\.|light\\.|sys\\.)"
 
             - name: KAFKA_AUTO_OFFSET_RESET
               value: "latest"
