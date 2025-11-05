@@ -68,7 +68,7 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
      --eval 'db.readings_shard1.find({source:\"laptop-layne\"}).sort({_id:-1}).limit(1)'"
 
 <details>
-  <summary>Click to expand</summary>
+  <summary>PA2 details. Click to expand</summary>
 
 
 ## PA2 Demo Checklist (showing the graders everything works)
