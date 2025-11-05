@@ -67,7 +67,8 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "mongosh mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@localhost:27017/sensors?authSource=sensors \
      --eval 'db.readings_shard1.find({source:\"laptop-layne\"}).sort({_id:-1}).limit(1)'"
 
-
+<details>
+  <summary>Click to expand</summary>
 
 
 ## PA2 Demo Checklist (showing the graders everything works)
