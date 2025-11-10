@@ -240,7 +240,7 @@ def main() -> int:
                             msg.value, msg.key, tp.topic, tp.partition, msg.offset
                         )
                         # compact preview
-                        preview = json.dumps({k: doc[k] for k in ("sensorType", "value", "values", "raw") if k in doc})[:240]
+                        preview = json.dumps({k: doc[k] for k in ("sensorType", "value", "values", "raw", "device_id", "source") if k in doc})[:240]
                         log.info("Consumed %s p=%s o=%s | %s", tp.topic, tp.partition, msg.offset, preview)
                     except Exception as e:
                         log.exception("Normalization error; skipping %s-%s@%s: %s",
