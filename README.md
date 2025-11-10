@@ -67,6 +67,200 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "mongosh mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@localhost:27017/sensors?authSource=sensors \
      --eval 'db.readings_shard1.find({source:\"laptop-layne\"}).sort({_id:-1}).limit(1)'"
 
+
+
+## **0. Prerequisites**
+
+Run these once per session on the **master node terminal** (cloud-c1-m1):
+
+```bash
+export TEAM_NS=team2
+export POD=$(kubectl -n $TEAM_NS get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
+```
+
+Verify Spark is up:
+
+```bash
+kubectl -n $TEAM_NS get pods -l app=spark
+```
+
+Expected example:
+
+```
+spark-master-deploy-xxxxx     Running
+spark-worker-deploy-xxxxx     Running (x5)
+spark-driver-deploy-xxxxx     Running
+```
+
+---
+
+## **1. Cluster Health Check (Show the grader the cluster is alive)**
+
+```bash
+kubectl get nodes -o wide
+kubectl -n $TEAM_NS get pods -o wide
+kubectl -n $TEAM_NS top pods   # if metrics-server installed
+```
+
+Expected:
+
+* All nodes Ready
+* Workers spread across multiple cloud-c1-wX nodes
+
+---
+
+## **2. Verify Mongo Shards (Input Data Exists)**
+
+```bash
+kubectl -n $TEAM_NS run mongo-check --rm -i --restart=Never --image=mongo:7.0 -- \
+  mongosh "mongodb://mongo-svc:27017/sensors" --eval '
+    ["readings_shard1","readings_shard2","readings_shard3","readings_shard4","readings_shard5"]
+      .forEach(c => print(c, db[c].countDocuments()))
+  '
+```
+
+Expected ~100k per shard.
+
+---
+
+## **3. Run MapReduce Analytics (M,R Experiments)**
+
+You will run **three** experiments:
+
+| Experiment | Maps (M) | Reduces (R) | Iterations (n) |
+| ---------- | -------- | ----------- | -------------- |
+| #1         | 10       | 2           | 10             |
+| #2         | 50       | 5           | 10             |
+| #3         | 100      | 10          | 10             |
+
+### **Run #1 — M=10, R=2**
+
+```bash
+kubectl -n $TEAM_NS exec -i $POD -- sh -lc '
+M=10 R=2 ITERS=10 /tmp/run_pa3.sh
+'
+```
+
+### **Run #2 — M=50, R=5**
+
+```bash
+kubectl -n $TEAM_NS exec -i $POD -- sh -lc '
+M=50 R=5 ITERS=10 /tmp/run_pa3.sh
+'
+```
+
+### **Run #3 — M=100, R=10**
+
+```bash
+kubectl -n $TEAM_NS exec -i $POD -- sh -lc '
+M=100 R=10 ITERS=10 /tmp/run_pa3.sh
+'
+```
+
+---
+
+## **4. Confirm Job is Using Multiple Workers (Parallelism Proof)**
+
+Run while job is running:
+
+```bash
+kubectl -n $TEAM_NS logs $POD -f | grep -E "Starting task|executor|partition"
+```
+
+You should see **different node IPs**:
+
+```
+Starting task ... on 10.244.7.7 (executor 1)
+Starting task ... on 10.244.19.7 (executor 0)
+Starting task ... on 10.244.14.8 (executor 3)
+Starting task ... on 10.244.20.8 (executor 4)
+```
+
+This is **the required proof** that Spark is **actually parallelized** across cloud workers.
+
+---
+
+## **5. View Results in Human Readable Form**
+
+After each experiment ends, summaries are automatically written:
+
+```bash
+ls /tmp/pa3_out/
+```
+
+Then display summary table:
+
+```bash
+cat /tmp/pa3_out/*/summary.txt
+```
+
+Expected format:
+
+```
+==== SUMMARY: pa3_20251107_045321 ====
+Combo        | n   | p50 (s) | p90 (s) | p95 (s) | p99 (s)
+-----------------------------------------------------------
+M10_R2       | 10  | xx.xxx  | xx.xxx  | xx.xxx  | xx.xxx
+M50_R5       | 10  | xx.xxx  | xx.xxx  | xx.xxx  | xx.xxx
+M100_R10     | 10  | 18.991  | 19.657  | 19.715  | 19.761
+```
+
+This is **exactly what the assignment wants you to report.**
+
+---
+
+## **6. Show Sample Analytical Output (Grader wants to see real values)**
+
+Example: Total work per house (printed by job):
+
+```bash
+kubectl -n $TEAM_NS exec -i $POD -- sh -lc '
+python3 - <<EOF
+import pandas as pd
+df = pd.read_csv("/tmp/pa3_out/latest/total_work_per_house.csv")
+print(df.head(10).to_string())
+EOF
+'
+```
+
+---
+
+## **7. Restart Spark if Needed**
+
+```bash
+kubectl -n $TEAM_NS rollout restart deploy/spark-master-deploy
+kubectl -n $TEAM_NS rollout restart deploy/spark-worker-deploy
+kubectl -n $TEAM_NS rollout restart deploy/spark-driver-deploy
+```
+
+Watch status:
+
+```bash
+kubectl -n $TEAM_NS get pods -w
+```
+
+---
+
+## **8. If a Job Failed Due to Output Folder Existing**
+
+Spark refuses to overwrite existing output.
+
+Fix:
+
+```bash
+kubectl -n $TEAM_NS exec $POD -- rm -rf /tmp/pa3_out/*
+```
+
+Then rerun the experiment.
+
+
+
+
+
+
+
+
+
 <details>
   <summary>PA2 details. Click to expand</summary>
 
