@@ -85,33 +85,45 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
 ✅ 1) Setup
 
 ```bash
+# Namespace and collection list
 NAMESPACE=team2
 COLLS="readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5"
 
-# Get driver pod + its IP
-DRIVER_POD=$(kubectl -n $NAMESPACE get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
-POD_IP=$(kubectl -n $NAMESPACE get pod "$DRIVER_POD" -o jsonpath='{.status.podIP}')
+# Get the Spark driver pod name and its IP
+POD=$(kubectl -n $NAMESPACE get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
+POD_IP=$(kubectl -n $NAMESPACE get pod "$POD" -o jsonpath='{.status.podIP}')
+
+# Verify
+echo "Driver pod: $POD"
+echo "Driver IP:  $POD_IP"
+
 ```
 
 ✅ 2) Run Experiment
 
 ```bash
 # --- Run Spark job with 5 executors (1 core each) on your 5 workers ---
-kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- bash -lc "
+kubectl -n $NAMESPACE exec -it "$POD" -- bash -lc "
   /opt/spark/bin/spark-submit \
     --master spark://spark-master-svc:7077 \
-    --conf spark.ui.showConsoleProgress=true \
-    --conf spark.dynamicAllocation.enabled=false \
     --conf spark.driver.host=$POD_IP \
     --conf spark.driver.port=7078 \
     --conf spark.blockManager.port=7079 \
+    --conf spark.ui.showConsoleProgress=true \
+    --conf spark.dynamicAllocation.enabled=false \
     --conf spark.executor.instances=5 \
     --conf spark.executor.cores=1 \
     --conf spark.executor.memory=2g \
     --conf spark.cores.max=5 \
     --jars /tmp/jars/mongo-spark-connector_2.12-10.3.0.jar,/tmp/jars/mongodb-driver-sync-4.11.1.jar,/tmp/jars/mongodb-driver-core-4.11.1.jar,/tmp/jars/bson-4.11.1.jar \
     /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
-      --collections \"$COLLS\" --iters 10 --M 30 --R 5 --writeMode append
+      --collections \"$COLLS\" \
+      --iters 10 \
+      --M 10 \
+      --R 2 \
+      --writeMode append
+"
+
 ```
 This will save a CSV like results_YYYYMMDD_HHMMSS.csv inside the driver pod at:
 ```bah
