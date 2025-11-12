@@ -1,6 +1,6 @@
 
 ---
-## PA3 running publishers
+# PA3 running publishers
 
 ```bash
 # run once per terminal
@@ -8,7 +8,7 @@ export BROKERS="127.0.0.1:29091,127.0.0.1:29092"
 export TOPIC="debs-sensors"
 ```
 
-# Imran runs 3 publishers
+## Imran runs 3 publishers
 ```bash
 python3 publisher.py \
   --brokers "$BROKERS" \
@@ -36,7 +36,7 @@ python3 publisher.py \
   --log-every 10000
 ```
 
-# Layne runs 2 publishers
+## Layne runs 2 publishers
 ```bash
 python3 publisher.py \
   --brokers "$BROKERS" \
@@ -56,7 +56,7 @@ python3 publisher.py \
 ```
 
 
-# Now show mongo shard count
+## Now show mongo shard count
 ```bash
 ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "mongosh mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@localhost:27017/sensors?authSource=sensors \
@@ -64,14 +64,14 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
 ```
 
 
-# Show the latest records (e.g.sensorType":"33-5-2" corresponds to house 33, household 5, plug 2.)
+## Show the latest records (e.g.sensorType":"33-5-2" corresponds to house 33, household 5, plug 2.)
 ```bash
 ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf exec deploy/flask-web -n pipeline -- \
    python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5000/last?n=5').read().decode())\""
 ```
 
-# Can show schema
+## Can show schema
 ```bash
 ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "mongosh mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@localhost:27017/sensors?authSource=sensors \
@@ -80,7 +80,7 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
 
 
 
-## MapReduce Demo
+# MapReduce Demo
 
 ✅ 1) Setup
 
@@ -175,7 +175,7 @@ open pa3_run_mapreduce_cdf.png
 open pa3_run_iter_total_percentiles.csv
 ```
 
-## Health Checks 
+# Health Checks 
 
 ✅ 1. Check Kubernetes Pod Health (master & workers)
 
@@ -221,7 +221,7 @@ done
 
 ✅ 3. Master <-> Worker Endpoints
 
-# Spark master service should have Endpoints backing it (proves Service→Pod wiring)
+ Spark master service should have Endpoints backing it (proves Service→Pod wiring)
 ```bash
 kubectl -n team2 get svc spark-master-svc -o wide
 kubectl -n team2 get endpoints spark-master-svc -o wide
@@ -229,7 +229,7 @@ kubectl -n team2 get endpoints spark-master-svc -o wide
 
 ✅ 4. Commoon Gacha Checks
 
-# Verify each worker is pointing at the right master URL and ports (look for the command line)
+ Verify each worker is pointing at the right master URL and ports (look for the command line)
 ```bash
 for P in $(kubectl -n team2 get pod -l app=sparkWorkerApp -o name); do
   echo "=== $P ==="
@@ -237,7 +237,7 @@ for P in $(kubectl -n team2 get pod -l app=sparkWorkerApp -o name); do
 done
 ```
 
-# Get the driver pod name
+ Get the driver pod name
 ```bash
 DRIVER_POD=$(kubectl -n team2 get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
 echo "$DRIVER_POD"
