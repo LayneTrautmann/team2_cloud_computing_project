@@ -2,11 +2,14 @@
 ---
 ## PA3 running publishers
 
+```bash
 # run once per terminal
 export BROKERS="127.0.0.1:29091,127.0.0.1:29092"
 export TOPIC="debs-sensors"
+```
 
 # Imran runs 3 publishers
+```bash
 python3 publisher.py \
   --brokers "$BROKERS" \
   --input data/shard1.csv \
@@ -31,9 +34,10 @@ python3 publisher.py \
   --acks all \
   --device-id device-imran --source laptop-imran \
   --log-every 10000
-
+```
 
 # Layne runs 2 publishers
+```bash
 python3 publisher.py \
   --brokers "$BROKERS" \
   --input data/shard4.csv \
@@ -49,29 +53,129 @@ python3 publisher.py \
   --acks all \
   --device-id device-layne --source laptop-layne \
   --log-every 10000
+```
 
 
 # Now show mongo shard count
+```bash
 ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "mongosh mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@localhost:27017/sensors?authSource=sensors \
      --eval 'db.getCollectionNames().filter(n=>n.startsWith(\"readings_shard\")).map(n=>({n,count:db[n].countDocuments()}))'"
+```
 
 
 # Show the latest records (e.g.sensorType":"33-5-2" corresponds to house 33, household 5, plug 2.)
+```bash
 ssh -p 2201 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "sudo kubectl --kubeconfig /etc/kubernetes/admin.conf exec deploy/flask-web -n pipeline -- \
    python -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:5000/last?n=5').read().decode())\""
+```
 
 # Can show schema
+```bash
 ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
   "mongosh mongodb://sensorapp:CHANGE_ME_STRONG_PASSWORD@localhost:27017/sensors?authSource=sensors \
      --eval 'db.readings_shard1.find({source:\"laptop-layne\"}).sort({_id:-1}).limit(1)'"
+```
 
 
 
+## MapReduce Demo
+
+✅ 1) Setup
+
+```bash
+NAMESPACE=team2
+COLLS="readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5"
+
+# Get driver pod + its IP
+DRIVER_POD=$(kubectl -n $NAMESPACE get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
+POD_IP=$(kubectl -n $NAMESPACE get pod "$DRIVER_POD" -o jsonpath='{.status.podIP}')
+```
+
+✅ 2) Run Experiment
+
+```bash
+# --- Run Spark job with 5 executors (1 core each) on your 5 workers ---
+kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- bash -lc "
+  /opt/spark/bin/spark-submit \
+    --master spark://spark-master-svc:7077 \
+    --conf spark.ui.showConsoleProgress=true \
+    --conf spark.dynamicAllocation.enabled=false \
+    --conf spark.driver.host=$POD_IP \
+    --conf spark.driver.port=7078 \
+    --conf spark.blockManager.port=7079 \
+    --conf spark.executor.instances=5 \
+    --conf spark.executor.cores=1 \
+    --conf spark.executor.memory=2g \
+    --conf spark.cores.max=5 \
+    --jars /tmp/jars/mongo-spark-connector_2.12-10.3.0.jar,/tmp/jars/mongodb-driver-sync-4.11.1.jar,/tmp/jars/mongodb-driver-core-4.11.1.jar,/tmp/jars/bson-4.11.1.jar \
+    /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
+      --collections \"$COLLS\" --iters 10 --M 30 --R 5 --writeMode append
+```
+This will save a CSV like results_YYYYMMDD_HHMMSS.csv inside the driver pod at:
+```bah
+/opt/spark/work-dir/app/
+```
+
+✅ 3) Pull the results from the driver pod → master node
+
+```bash
+# Make a local results dir on the master
+mkdir -p /home/cc/team2/pa3_results
+
+# Copy all result CSVs from the driver pod into that folder
+kubectl -n $NAMESPACE cp "$DRIVER_POD":/opt/spark/work-dir/app/results_*.csv /home/cc/team2/pa3_results/
+```
+
+✅ 4) Generate plots on the master node
+
+```bash
+cd /home/cc/team2
+source venv/bin/activate
+
+# Make CDF plots (time on Y axis, CDF on X axis) + percentiles CSV
+python3 plot_pa3_cdf.py ./pa3_results pa3_run
+
+# Outputs in /home/cc/team2:
+#   pa3_run_iter_total_cdf.png
+#   pa3_run_mapreduce_cdf.png
+#   pa3_run_iter_total_percentiles.csv
+deactivate
+```
+✅ 5) Copy results from master node → your host laptop
+
+Use your working SSH config alias (c1m819381) from your laptop:
+```bash
+# From your Windows/Linux/macOS laptop terminal:
+scp c1m819381:/home/cc/team2/pa3_run*_cdf.png .
+scp c1m819381:/home/cc/team2/pa3_run_iter_total_percentiles.csv .
+```
+
+If you prefer wildcards for all results from the experiment:
+```bash
+scp c1m819381:/home/cc/team2/pa3_results/results_*.csv .
+```
 
 
+✅ 6) Open the plots on your laptop
 
+Windows (PowerShell):
+```bash
+start .\pa3_run_iter_total_cdf.png
+start .\pa3_run_mapreduce_cdf.png
+start .\pa3_run_iter_total_percentiles.csv
+```
+
+```bash
+macOS (Terminal):
+
+open pa3_run_iter_total_cdf.png
+open pa3_run_mapreduce_cdf.png
+open pa3_run_iter_total_percentiles.csv
+```
+
+## Health Checks 
 
 ✅ 1. Check Kubernetes Pod Health (master & workers)
 
@@ -88,7 +192,6 @@ kubectl -n team2 get svc
 kubectl -n team2 get events --sort-by=.lastTimestamp | tail -n 50
 ```
 
-## Health Checks 
 
 ✅ 2. Master health
 
