@@ -75,6 +75,7 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
 
 ✅ 1. Check Kubernetes Pod Health (master & workers)
 
+```bash
 Run on bastion, or on your c1m819381 master VM:
 
 # Pods + IPs + nodes
@@ -85,10 +86,13 @@ kubectl -n team2 get svc
 
 # Recent events (helpful for ImagePullBackOff, restarts, etc.)
 kubectl -n team2 get events --sort-by=.lastTimestamp | tail -n 50
+```
 
+## Health Checks 
 
 ✅ 2. Master health
 
+```bash
 MASTER_POD=$(kubectl -n team2 get pod -l app=sparkMasterApp -o jsonpath='{.items[0].metadata.name}')
 
 # Pod status & container conditions
@@ -96,10 +100,11 @@ kubectl -n team2 describe pod "$MASTER_POD"
 
 # Master logs: worker registrations, app registrations, executor launches
 kubectl -n team2 logs "$MASTER_POD" | egrep -i 'Registering (worker|app)|Launching executor|Removing worker' | tail -n 80
-  
+```  
 
 ✅ 3. Worker health
 
+```bash
 # List worker pods
 kubectl -n team2 get pod -l app=sparkWorkerApp -o name
 
@@ -109,25 +114,37 @@ for P in $(kubectl -n team2 get pod -l app=sparkWorkerApp -o name); do
   kubectl -n team2 describe "$P" | egrep -A3 'Conditions:|Ready'
   kubectl -n team2 logs "$P" | egrep -i 'Successfully registered|Registered with master|heartbeat|Asked to launch executor' | tail -n 20
 done
+```
 
 ✅ 3. Master <-> Worker Endpoints
 
 # Spark master service should have Endpoints backing it (proves Service→Pod wiring)
+```bash
 kubectl -n team2 get svc spark-master-svc -o wide
 kubectl -n team2 get endpoints spark-master-svc -o wide
-
+```
 
 ✅ 4. Commoon Gacha Checks
 
 # Verify each worker is pointing at the right master URL and ports (look for the command line)
+```bash
 for P in $(kubectl -n team2 get pod -l app=sparkWorkerApp -o name); do
   echo "=== $P ==="
   kubectl -n team2 logs "$P" | egrep -m1 -i 'start-worker|CoarseGrainedExecutorBackend|driver-url|worker-url'
 done
+```
 
 # Get the driver pod name
+```bash
 DRIVER_POD=$(kubectl -n team2 get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
 echo "$DRIVER_POD"
+```
+
+
+
+
+
+
 
 
 
@@ -135,7 +152,7 @@ echo "$DRIVER_POD"
 
 
 <details>
-  <summary>##PA2 details. Click to expand</summary>
+  ## <summary> PA2 details. Click to expand</summary>
 
 
 ## PA2 Demo Checklist (showing the graders everything works)
