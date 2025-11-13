@@ -1,7 +1,13 @@
 
 New files:
+---
     smart_house_mapreduce_rdd.py
-     plot_pa3_cdf.py
+    plot_pa3_cdf.py
+Edited Files:
+---
+    publisher.py
+    flask_server.py
+    
 
 
 
