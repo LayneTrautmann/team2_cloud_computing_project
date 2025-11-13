@@ -1,4 +1,10 @@
 
+New files:
+    smart_house_mapreduce_rdd.py
+     plot_pa3_cdf.py
+
+
+
 ---
 # PA3 running publishers
 
