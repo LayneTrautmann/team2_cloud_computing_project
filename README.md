@@ -83,7 +83,7 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
 
 This section documents the complete procedure we used to copy the five sharded Smart Home (sensors) collections from project CH-822922 (legacy) to project CH-819381 (current cluster) via a streamed mongodump | mongorestore pipeline.
 
-🔧 1. Environment Setup (on CH-819381 master: cloud-c1-m1)
+🚀 1. Environment Setup (on CH-819381 master: cloud-c1-m1)
 ## SSH / Bastion configuration
 ```bash
 export TEAM2_KEY="$HOME/.ssh/team2_key.pem"        # SSH key for team2 VMs
@@ -99,7 +99,7 @@ export SRC_DB="sensors"      # source DB on 822922
 export DST_DB="sensors"      # destination DB on 819381
 ```
 
-🧩 2. Prepare Kubernetes Namespace and Receiver Pod
+🚀 2. Prepare Kubernetes Namespace and Receiver Pod
 ```bash
 # Ensure namespace exists
 kubectl get ns team2 >/dev/null 2>&1 || kubectl create ns team2
@@ -115,7 +115,7 @@ kubectl -n team2 wait --for=condition=Ready pod/mongorestore-job --timeout=180s
 ```
 
 
-🧰 3. Install MongoDB Database Tools in Receiver Pod
+🚀 3. Install MongoDB Database Tools in Receiver Pod
 ```bash
 kubectl -n team2 exec -i mongorestore-job -- sh -lc '
   set -e
@@ -132,7 +132,7 @@ kubectl -n team2 exec -i mongorestore-job -- sh -lc '
 '
 ```
 
-🧹 4. Drop Old Collections Before Import (to avoid duplicate _id errors)
+🚀 4. Drop Old Collections Before Import (to avoid duplicate _id errors)
 ```bash
 kubectl -n team2 run mongo-cli --rm -i --restart=Never --image=mongo:7.0 -- \
   mongosh "mongodb://mongo-svc:27017/sensors" --eval '
@@ -166,7 +166,7 @@ ssh -o IdentitiesOnly=yes \
 ```
 
 
-🟢 --drop ensures old documents are replaced, preventing _id duplicate errors.
+🚀 --drop ensures old documents are replaced, preventing _id duplicate errors.
 
 🔍 6. Post-Restore Verification
 
