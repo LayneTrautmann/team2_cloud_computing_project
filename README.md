@@ -79,6 +79,119 @@ ssh -p 2205 -i ~/.ssh/team2_key.pem cc@127.0.0.1 \
 ```
 
 
+# Data Transfer
+
+This section documents the complete procedure we used to copy the five sharded Smart Home (sensors) collections from project CH-822922 (legacy) to project CH-819381 (current cluster) via a streamed mongodump | mongorestore pipeline.
+
+🔧 1. Environment Setup (on CH-819381 master: cloud-c1-m1)
+## SSH / Bastion configuration
+```bash
+export TEAM2_KEY="$HOME/.ssh/team2_key.pem"        # SSH key for team2 VMs
+export BASTION_KEY="$HOME/.ssh/F25_BASTION.pem"    # SSH key for 822922 bastion
+export BASTION_HOST="129.114.25.255"               # 822922 bastion host
+export VM5_PRIV="192.168.5.94"                     # 822922 VM5 (Mongo host)
+chmod 600 "$TEAM2_KEY" "$BASTION_KEY"
+
+# MongoDB credentials
+export MONGO_USER="sensorapp"
+export MONGO_PASS="CHANGE_ME_STRONG_PASSWORD"
+export SRC_DB="sensors"      # source DB on 822922
+export DST_DB="sensors"      # destination DB on 819381
+```
+
+🧩 2. Prepare Kubernetes Namespace and Receiver Pod
+```bash
+# Ensure namespace exists
+kubectl get ns team2 >/dev/null 2>&1 || kubectl create ns team2
+
+# Recreate a long-lived receiver pod for restore
+kubectl -n team2 delete pod mongorestore-job --force --grace-period=0 2>/dev/null || true
+kubectl -n team2 run mongorestore-job \
+  --image=debian:stable-slim \
+  --restart=Never --command -- sh -lc 'sleep 3600'
+
+# Wait until the pod is ready
+kubectl -n team2 wait --for=condition=Ready pod/mongorestore-job --timeout=180s
+```
+
+
+🧰 3. Install MongoDB Database Tools in Receiver Pod
+```bash
+kubectl -n team2 exec -i mongorestore-job -- sh -lc '
+  set -e
+  apt-get update
+  apt-get install -y wget gnupg ca-certificates
+  echo "deb [signed-by=/usr/share/keyrings/mongodb-org-archive-keyring.gpg arch=amd64] \
+       https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" \
+       > /etc/apt/sources.list.d/mongodb-org-7.0.list
+  wget -qO - https://pgp.mongodb.com/server-7.0.asc | gpg --dearmor -o \
+       /usr/share/keyrings/mongodb-org-archive-keyring.gpg
+  apt-get update
+  apt-get install -y mongodb-database-tools
+  mongorestore --version
+'
+```
+
+🧹 4. Drop Old Collections Before Import (to avoid duplicate _id errors)
+```bash
+kubectl -n team2 run mongo-cli --rm -i --restart=Never --image=mongo:7.0 -- \
+  mongosh "mongodb://mongo-svc:27017/sensors" --eval '
+    ["readings","readings_shard1","readings_shard2","readings_shard3",
+     "readings_shard4","readings_shard5"]
+      .forEach(c => { try { db.getCollection(c).drop(); } catch(e) {} });
+    print("Dropped target collections (if existed).");
+  '
+```
+
+🚀 5. Streamed Data Transfer (Direct Dump → Restore)
+
+The transfer uses a piped SSH stream:
+mongodump on VM5 (822922) → SSH → mongorestore in K8s pod (819381).
+This avoids temporary files and keeps the transfer secure and efficient.
+```bash
+ssh -o IdentitiesOnly=yes \
+  -i "$TEAM2_KEY" \
+  -o "ProxyCommand=ssh -o IdentitiesOnly=yes -i $BASTION_KEY -W %h:%p cc@$BASTION_HOST" \
+  cc@"$VM5_PRIV" \
+  "mongodump \
+     --host 127.0.0.1 --port 27017 \
+     --username '$MONGO_USER' \
+     --password '$MONGO_PASS' \
+     --authenticationDatabase $SRC_DB \
+     --db $SRC_DB \
+     --archive --gzip" \
+| kubectl -n team2 exec -i mongorestore-job -- \
+    sh -lc 'mongorestore --host mongo-svc --port 27017 --archive --gzip \
+                     --nsInclude "'"$SRC_DB"'.readings_shard*" --drop'
+```
+
+
+🟢 --drop ensures old documents are replaced, preventing _id duplicate errors.
+
+🔍 6. Post-Restore Verification
+
+Check collections and counts in MongoDB inside the K8s cluster.
+
+```bash
+kubectl -n team2 run mongo-check --rm -i --restart=Never --image=mongo:7.0 -- \
+  mongosh "mongodb://mongo-svc:27017/$SRC_DB" --eval 'db.getCollectionNames()'
+
+for c in readings_shard1 readings_shard2 readings_shard3 readings_shard4 readings_shard5; do
+  kubectl -n team2 run mongo-check --rm -i --restart=Never --image=mongo:7.0 -- \
+    mongosh "mongodb://mongo-svc:27017/$SRC_DB" --eval "print(\"$c:\", db.$c.countDocuments())"
+done
+```
+
+Expected output:
+
+All five shard collections present and with non-zero counts (matching the 822922 source).
+
+
+
+
+
+
+
 
 # MapReduce Demo
 
