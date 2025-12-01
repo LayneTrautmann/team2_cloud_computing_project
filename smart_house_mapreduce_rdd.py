@@ -137,23 +137,26 @@ def main():
     log("Warming up DataSource and Mongo connections...")
     _ = df_shard(spark, "sensors", shards[0], args.readUri).limit(1).count()
 
+    # PA4: Pre load data - outside the loop
+    log("Pre loading data from MongoDB")
+    rdd_load = rdd_from_shards(spark, shards, args.readUri, prop_filter=1)
+    rdd_load = rdd_load.repartition(args.M).persist(StorageLevel.MEMORY_ONLY)
+    _ = rdd_load.count()  # materialize
+
+    rdd_work = rdd_from_shards(spark, shards, args.readUri, prop_filter=0)
+    rdd_work = rdd_work.repartition(args.M).persist(StorageLevel.MEMORY_ONLY)
+    _ = rdd_work.count()  # materialize
+    log("Data pre-loaded")
+
     results_summary = []  # rows for the printed table
 
     for it in range(1, args.iters + 1):
         log(f"=== Iteration {it} START ===")
 
-        # LOAD (property=1) as RDD, set map parallelism
+        # PA4: Data loaded get time
         t0 = time.time()
-        rdd_load = rdd_from_shards(spark, shards, args.readUri, prop_filter=1)
-        rdd_load = rdd_load.repartition(args.M).persist(StorageLevel.MEMORY_ONLY)
-        _ = rdd_load.count()  # materialize
-        t_load_in = time.time()
-
-        # WORK (property=0) as RDD
-        rdd_work = rdd_from_shards(spark, shards, args.readUri, prop_filter=0)
-        rdd_work = rdd_work.repartition(args.M).persist(StorageLevel.MEMORY_ONLY)
-        _ = rdd_work.count()
-        t_work_in = time.time()
+        t_load_in = t0
+        t_work_in = t0
 
         # Compute avg_load_per_plug
         rdd_avg = avg_load_per_plug_rdd(sc, rdd_load, args.R).persist(StorageLevel.MEMORY_ONLY)
@@ -204,10 +207,12 @@ def main():
 
         log(f"=== Iteration {it} END ===")
 
-        rdd_load.unpersist(False)
-        rdd_work.unpersist(False)
         rdd_avg.unpersist(False)
         rdd_twh.unpersist(False)
+
+    # PA4: Unpersist shared RDDs
+    rdd_load.unpersist(False)
+    rdd_work.unpersist(False)
 
     # Pretty print a simple table to stdout (CSV-like)
     cols = ["iter","maps","reduces","executors",
@@ -219,6 +224,14 @@ def main():
     print(sep)
     for row in results_summary:
         print(" | ".join(f"{str(row[c]):>20}" for c in cols))
+
+    # PA4: Save CSV for CDF plotting (format: iteration, exec_time, response_time)
+    csv_file = "pa4_results.csv"
+    log(f"Saving results to {csv_file}")
+    with open(csv_file, 'w') as f:
+        for row in results_summary:
+            exec_time = row["avg_reduce_s"] + row["twh_reduce_s"]
+            f.write(f"{row['iter']}, {exec_time}, {exec_time}\n")
 
     spark.stop()
 

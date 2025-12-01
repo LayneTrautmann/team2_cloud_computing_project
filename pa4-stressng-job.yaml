@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pa4-stressng
+  namespace: team2  
+spec:
+  template:
+    metadata:
+      labels:
+        app: pa4-stressng
+    spec:
+      containers:
+      - name: stressng-container
+        image: ubuntu:20.04
+        imagePullPolicy: IfNotPresent
+        # Install stress-ng and keep running
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            apt-get update && apt-get install -y stress-ng
+            while true; do sleep 3600; done
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - sparkDriverApp 
+            topologyKey: "kubernetes.io/hostname"
+      restartPolicy: Never
