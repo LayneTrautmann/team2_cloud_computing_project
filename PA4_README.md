@@ -5,6 +5,33 @@
 
 ### 1: Baseline - No Stress
 
+this seems to run a mapreduce job 
+
+```bash
+kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
+  /spark-3.1.1-bin-hadoop3.2/bin/spark-submit \
+    --master spark://spark-master-svc:7077 \
+    --conf spark.driver.host=$DRIVER_IP \
+    --conf spark.driver.port=7076 \
+    --conf spark.blockManager.port=7079 \
+    --conf spark.ui.showConsoleProgress=true \
+    --conf spark.dynamicAllocation.enabled=false \
+    --conf spark.executor.instances=5 \
+    --conf spark.executor.cores=1 \
+    --conf spark.executor.memory=2g \
+    --conf spark.cores.max=5 \
+    --jars /tmp/jars/mongo-spark-connector_2.12-10.3.0.jar,/tmp/jars/mongodb-driver-sync-4.11.1.jar,/tmp/jars/mongodb-driver-core-4.11.1.jar,/tmp/jars/bson-4.11.1.jar \
+    /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
+      --collections \"readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5\" \
+      --M 10 \
+      --R 2 \
+      --iters 3 \
+      --writeMode append
+"
+```
+
+
+
 ```bash
 # 1. SSH into cluster master
 
