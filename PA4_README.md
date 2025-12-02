@@ -30,6 +30,50 @@ kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
 "
 ```
 
+
+try this for setup???
+
+```bash
+Copy/paste this block:
+
+# 0. Enter master (already done)
+
+# 1. Ensure master/workers running
+kubectl -n team2 apply -f ~/team2/pa3-scaffold/scaffolding_code/spark-master-deploy.yaml
+kubectl -n team2 apply -f ~/team2/pa3-scaffold/scaffolding_code/spark-worker-deploy.yaml
+
+# 2. Start driver
+kubectl -n team2 apply -f ~/team2/pa3-scaffold/scaffolding_code/spark-driver-deploy.yaml
+
+# 3. Get pod + IP
+DRIVER_POD=$(kubectl -n team2 get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
+DRIVER_IP=$(kubectl -n team2 get pod "$DRIVER_POD" -o jsonpath='{.status.podIP}')
+
+# 4. Stage JARs
+kubectl -n team2 exec -it "$DRIVER_POD" -- mkdir -p /tmp/jars
+kubectl -n team2 cp ~/team2/pa3-scaffold/jars/. "$DRIVER_POD":/tmp/jars/
+
+# 5. Copy Python script
+kubectl -n team2 cp ~/team2/smart_house_mapreduce_rdd.py "$DRIVER_POD":/opt/spark/work-dir/app/
+
+# 6. Run Spark job
+kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
+  /spark-3.1.1-bin-hadoop3.2/bin/spark-submit \
+    --master spark://spark-master-svc:7077 \
+    --conf spark.driver.host=$DRIVER_IP \
+    --conf spark.driver.port=7076 \
+    --conf spark.blockManager.port=7079 \
+    --conf spark.executor.instances=5 \
+    --conf spark.executor.cores=1 \
+    --conf spark.executor.memory=2g \
+    --jars /tmp/jars/*.jar \
+    /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
+      --collections \"readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5\" \
+      --M 10 --R 2 --iters 3 --writeMode append
+"
+```
+
+
 ### 1: Baseline - No Stress
 
 ```bash
