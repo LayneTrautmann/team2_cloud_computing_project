@@ -3,7 +3,7 @@
 ### New/Updated Files
 `smart_house_mapreduce_rdd.py`, `pa4-stressng-job.yaml`,  `migrate_spark_driver.sh`, `automated_migration_monitor.sh` 
 
-### 1: Baseline - No Stress
+
 
 this seems to run a mapreduce job 
 
@@ -30,7 +30,7 @@ kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
 "
 ```
 
-
+### 1: Baseline - No Stress
 
 ```bash
 # 1. SSH into cluster master
