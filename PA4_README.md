@@ -34,44 +34,152 @@ kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
 try this for setup???
 
 ```bash
-Copy/paste this block:
+I’ll give you a from-cloud-c1-m1-only sequence that:
 
-# 0. Enter master (already done)
+Uses your working spark-submit command
 
-# 1. Ensure master/workers running
-kubectl -n team2 apply -f ~/team2/pa3-scaffold/scaffolding_code/spark-master-deploy.yaml
-kubectl -n team2 apply -f ~/team2/pa3-scaffold/scaffolding_code/spark-worker-deploy.yaml
+Runs a PA4-style baseline (many iterations, no stress)
 
-# 2. Start driver
-kubectl -n team2 apply -f ~/team2/pa3-scaffold/scaffolding_code/spark-driver-deploy.yaml
+Leaves results ready for plotting with plot_pa3_cdf.py
 
-# 3. Get pod + IP
-DRIVER_POD=$(kubectl -n team2 get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
-DRIVER_IP=$(kubectl -n team2 get pod "$DRIVER_POD" -o jsonpath='{.status.podIP}')
+I’ll assume you're already SSH’d into:
 
-# 4. Stage JARs
-kubectl -n team2 exec -it "$DRIVER_POD" -- mkdir -p /tmp/jars
-kubectl -n team2 cp ~/team2/pa3-scaffold/jars/. "$DRIVER_POD":/tmp/jars/
+cc@cloud-c1-m1:~$
 
-# 5. Copy Python script
-kubectl -n team2 cp ~/team2/smart_house_mapreduce_rdd.py "$DRIVER_POD":/opt/spark/work-dir/app/
 
-# 6. Run Spark job
+and your files are in ~/team2.
+
+0️⃣ Go to the PA4 directory
+cd ~/team2
+
+1️⃣ Make sure Spark master & workers are up
+
+From ~/team2/pa3-scaffold/scaffolding_code:
+
+cd ~/team2/pa3-scaffold/scaffolding_code
+
+# (re)apply master and workers, idempotent
+kubectl -n team2 apply -f spark-master-deploy.yaml
+kubectl -n team2 apply -f spark-worker-deploy.yaml
+
+# check pods
+kubectl -n team2 get pods -l app=sparkMasterApp -o wide
+kubectl -n team2 get pods -l app=sparkWorkerApp -o wide
+
+
+Optional sanity check that workers are registered with the master:
+
+curl -sS -L http://localhost:30008/json | jq '.aliveworkers'
+
+
+You want a positive number (e.g., 5).
+
+2️⃣ Get the Spark driver pod & IP
+
+Back in ~/team2 is fine:
+
+cd ~/team2
+
+NAMESPACE=team2
+
+DRIVER_POD=$(kubectl -n $NAMESPACE get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
+DRIVER_IP=$(kubectl -n $NAMESPACE get pod "$DRIVER_POD" -o jsonpath='{.status.podIP}')
+
+echo "Driver pod: $DRIVER_POD"
+echo "Driver IP:  $DRIVER_IP"
+
+
+If the driver pod name changed, this will pick up the new one.
+
+3️⃣ Ensure Mongo Spark JARs are in the driver
+
+You already did this once, but if the driver pod ever restarts, the files vanish, so we treat this as part of the baseline ritual:
+
+kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- mkdir -p /tmp/jars
+
+kubectl -n $NAMESPACE cp ~/team2/pa3-scaffold/jars/mongo-spark-connector_2.12-10.3.0.jar "$DRIVER_POD":/tmp/jars/
+kubectl -n $NAMESPACE cp ~/team2/pa3-scaffold/jars/mongodb-driver-sync-4.11.1.jar        "$DRIVER_POD":/tmp/jars/
+kubectl -n $NAMESPACE cp ~/team2/pa3-scaffold/jars/mongodb-driver-core-4.11.1.jar        "$DRIVER_POD":/tmp/jars/
+kubectl -n $NAMESPACE cp ~/team2/pa3-scaffold/jars/bson-4.11.1.jar                       "$DRIVER_POD":/tmp/jars/
+
+# sanity check in the pod:
+kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- ls -l /tmp/jars
+
+
+You should see all four JARs there.
+
+4️⃣ Copy your PA4-ready script into the driver
+
+You’ve got smart_house_mapreduce_rdd.py in ~/team2. Put it where your working command expects it:
+
+kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- mkdir -p /opt/spark/work-dir/app
+
+kubectl -n $NAMESPACE cp \
+  ~/team2/smart_house_mapreduce_rdd.py \
+  "$DRIVER_POD":/opt/spark/work-dir/app/smart_house_mapreduce_rdd.py
+
+
+Optional check:
+
+kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- ls -l /opt/spark/work-dir/app
+
+5️⃣ Run the PA4 baseline (many iterations, no stress)
+
+Now we reuse your working spark-submit layout, just with PA4-ish parameters.
+Example: M=50, R=10, iters=100 for a decent baseline.
+
+cd ~/team2
+
 kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
   /spark-3.1.1-bin-hadoop3.2/bin/spark-submit \
     --master spark://spark-master-svc:7077 \
     --conf spark.driver.host=$DRIVER_IP \
     --conf spark.driver.port=7076 \
     --conf spark.blockManager.port=7079 \
-    --conf spark.executor.instances=5 \
+    --conf spark.dynamicAllocation.enabled=false \
+    --conf spark.executor.instances=2 \
     --conf spark.executor.cores=1 \
     --conf spark.executor.memory=2g \
-    --jars /tmp/jars/*.jar \
+    --conf spark.cores.max=2 \
+    --jars /tmp/jars/mongo-spark-connector_2.12-10.3.0.jar,/tmp/jars/mongodb-driver-sync-4.11.1.jar,/tmp/jars/mongodb-driver-core-4.11.1.jar,/tmp/jars/bson-4.11.1.jar \
     /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
       --collections \"readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5\" \
-      --M 10 --R 2 --iters 3 --writeMode append
+      --M 10 \
+      --R 2 \
+      --iters 100 \
+      --writeMode append
 "
+
+
+
+This will:
+
+Use the Mongo connector JARs you copied.
+
+Run your PA4-ready script.
+
+Preload RDDs once and then run 100 iterations.
+
+Write a CSV like:
+results_M50_R10_iters100_YYYYMMDD_HHMMSS.csv
+in /opt/spark/work-dir/app inside the driver.
+
+6️⃣ Copy the baseline CSV out of the driver
+
+Back on cloud-c1-m1, grab the newest results_*.csv:
+
+cd ~/team2
+mkdir -p pa4_results
+
+LATEST=$(kubectl -n team2 exec "$DRIVER_POD" -- bash -lc "ls -1t /opt/spark/work-dir/app/results_M*_R*_iters* | head -n 1")
+echo "Found in pod: $LATEST"
+
+kubectl -n team2 cp "$DRIVER_POD":"$LATEST" ./pa4_results/$(basename "$LATEST")
 ```
+
+
+
+
 
 
 ### 1: Baseline - No Stress
