@@ -175,6 +175,26 @@ LATEST=$(kubectl -n team2 exec "$DRIVER_POD" -- bash -lc "ls -1t /opt/spark/work
 echo "Found in pod: $LATEST"
 
 kubectl -n team2 cp "$DRIVER_POD":"$LATEST" ./pa4_results/$(basename "$LATEST")
+
+
+📥 Step 1 — Copy baseline data from cluster → your laptop
+scp -r c1m819381:/home/cc/team2/pa4_results ./pa4_results_baseline_local/
+scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_cdf.png ./pa4_results_baseline_local/
+scp c1m819381:/home/cc/team2/pa4_baseline_mapreduce_cdf.png ./pa4_results_baseline_local/
+scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_percentiles.csv ./pa4_results_baseline_local/
+
+
+✅ Run plotting script correctly
+
+From inside ~/team2:
+cd ~/team2
+source venv/bin/activate          # 🔥 MUST ACTIVATE venv
+
+pip install pandas numpy matplotlib --quiet   # only needed once
+
+python3 plot_pa3_cdf.py ./pa4_results pa4_baseline
+
+
 ```
 
 
