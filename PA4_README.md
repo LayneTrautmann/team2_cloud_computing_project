@@ -250,7 +250,7 @@ scp c1m819381:/home/cc/team2/pa4_stress_iter_total_percentiles.csv ./pa4_results
 ```
 
 
-### Experiment 3a: Manual Migration
+# Experiment 3a: Manual Migration
 
 ```bash
 # 1. Start experiment with stress (as above)
@@ -267,7 +267,7 @@ kubectl -n team2 exec $POD -- tail -f /opt/spark/work-dir/pa4_results.csv
 kubectl -n team2 cp $POD:/opt/spark/work-dir/pa4_results.csv /home/cc/team2/results_manual_migration.csv
 ```
 
-### Experiment 3b: Automated Migration
+# Experiment 3b: Automated Migration
 
 ```bash
 # 1. Start monitoring script in separate terminal
