@@ -159,6 +159,8 @@ source venv/bin/activate          # 🔥 MUST ACTIVATE venv
 pip install pandas numpy matplotlib --quiet   # only needed once
 
 python3 plot_pa3_cdf.py ./pa4_results pa4_baseline
+
+deactivate
 ```
 
 📥 Step 1 — Copy baseline data from cluster → your laptop
@@ -235,6 +237,8 @@ source venv/bin/activate          # 🔥 MUST ACTIVATE venv
 pip install pandas numpy matplotlib --quiet   # only needed once
 
 python3 plot_pa3_cdf.py ./pa4_results/stress pa4_stress
+
+deactivate
 ```
 
 📥 Step 1 — Copy stress data from cluster → your laptop
