@@ -357,12 +357,66 @@ pa4_results/
     └── results_after_migration.csv
 ```
 
-### Conclusion
+### Conclusion (15-iteration experiment)
 
 Manual migration successfully demonstrated tail tolerance:
 - Moved Spark driver from stressed node (w3) to clean node (w6)
 - Achieved 10-15% latency improvement
 - Proved migration concept works for reducing tail latency
+
+---
+
+## 100 Iteration Migration 
+
+100 iteration for manual migration: 
+
+### Experiment Setup
+
+**Experiment 1: 100 iterations WITH stress (collocated)**
+- Driver pod: `spark-driver-deploy-788454b886-rrfjq` on `cloud-c1-w6`
+- Stress pod: `pa4-stressng-sl62t` on `cloud-c1-w6` (collocated via pod affinity)
+- Stress: `stress-ng --cpu 2 --vm 1 --vm-bytes 512M --timeout 1800s`
+- Iterations: 100
+- Results saved: `results_100iter_before_migration.csv`
+
+**Migration:**
+- Deleted stress pod
+- Restarted driver deployment: `kubectl rollout restart deployment/spark-driver-deploy`
+- Driver moved: `cloud-c1-w6` → `cloud-c1-w17`
+
+**Experiment 2: 100 iterations AFTER migration (clean node)**
+- Driver pod: `spark-driver-deploy-5d7c58d8b-5plnk` on `cloud-c1-w17`
+- No stress on this node
+- Iterations: 100
+- Results saved: `results_100iter_after_migration.csv`
+
+### Results Summary
+
+**Performance Metrics:**
+
+| Metric | Before Migration (w/ stress) | After Migration (clean) | Improvement |
+|--------|------------------------------|-------------------------|-------------|
+| Average | 5.335s | 5.246s | 1.7% |
+| Median (p50) | 5.255s | 5.190s | 1.2% |
+| p90 | 5.711s | 5.490s | 3.9% |
+| p95 | 5.904s | 5.616s | 4.9% |
+| **p99** | **6.611s** | **6.071s** | **8.2%** |
+| **Max (tail)** | **8.063s** | **7.374s** | **8.5%** |
+
+**Key Findings:**
+- ✅ **Tail latency improved by 8.5%** (max: 8.063s → 7.374s)
+- ✅ **p99 improved by 8.2%** (6.611s → 6.071s)
+- ✅ **p95 improved by 4.9%** (5.904s → 5.616s)
+- ✅ **Tail improvement > Average improvement** (8.5% vs 1.7%)
+
+### CDF Plot
+
+See `PA4_Migration_Final_CDF.png` for the complete comparison showing:
+- Red line: Before migration (with stress, n=100)
+- Green line: After migration (clean node, n=100)
+- Clear separation in tail latencies (right side of plot)
+
+**Conclusion:** Manual migration successful. It reduced tail latency by moving the Spark driver from a stressed node to a clean node. It got 8.5% improvement in worst case latency.
 
 
 
