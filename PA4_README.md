@@ -3,6 +3,7 @@
 ### New/Updated Files
 `smart_house_mapreduce_rdd.py`, `pa4-stressng-job.yaml`,  `migrate_spark_driver.sh`, `automated_migration_monitor.sh` 
 
+ssh c1m819381
 
 
 this seems to run a mapreduce job 
@@ -33,7 +34,7 @@ kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
 
 try this for setup???
 
-```bash
+
 I’ll give you a from-cloud-c1-m1-only sequence that:
 
 Uses your working spark-submit command
@@ -43,19 +44,21 @@ Runs a PA4-style baseline (many iterations, no stress)
 Leaves results ready for plotting with plot_pa3_cdf.py
 
 I’ll assume you're already SSH’d into:
-
+```bash
 cc@cloud-c1-m1:~$
-
+```
 
 and your files are in ~/team2.
 
 0️⃣ Go to the PA4 directory
+```bash
 cd ~/team2
+```
 
 1️⃣ Make sure Spark master & workers are up
 
 From ~/team2/pa3-scaffold/scaffolding_code:
-
+```bash
 cd ~/team2/pa3-scaffold/scaffolding_code
 
 # (re)apply master and workers, idempotent
@@ -67,17 +70,17 @@ kubectl -n team2 get pods -l app=sparkMasterApp -o wide
 kubectl -n team2 get pods -l app=sparkWorkerApp -o wide
 
 
-Optional sanity check that workers are registered with the master:
+# Optional sanity check that workers are registered with the master:
 
 curl -sS -L http://localhost:30008/json | jq '.aliveworkers'
-
+```
 
 You want a positive number (e.g., 5).
 
 2️⃣ Get the Spark driver pod & IP
 
 Back in ~/team2 is fine:
-
+```bash
 cd ~/team2
 
 NAMESPACE=team2
@@ -87,14 +90,14 @@ DRIVER_IP=$(kubectl -n $NAMESPACE get pod "$DRIVER_POD" -o jsonpath='{.status.po
 
 echo "Driver pod: $DRIVER_POD"
 echo "Driver IP:  $DRIVER_IP"
-
+```
 
 If the driver pod name changed, this will pick up the new one.
 
 3️⃣ Ensure Mongo Spark JARs are in the driver
 
 You already did this once, but if the driver pod ever restarts, the files vanish, so we treat this as part of the baseline ritual:
-
+```bash
 kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- mkdir -p /tmp/jars
 
 kubectl -n $NAMESPACE cp ~/team2/pa3-scaffold/jars/mongo-spark-connector_2.12-10.3.0.jar "$DRIVER_POD":/tmp/jars/
@@ -104,14 +107,14 @@ kubectl -n $NAMESPACE cp ~/team2/pa3-scaffold/jars/bson-4.11.1.jar              
 
 # sanity check in the pod:
 kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- ls -l /tmp/jars
-
+```
 
 You should see all four JARs there.
 
 4️⃣ Copy your PA4-ready script into the driver
 
 You’ve got smart_house_mapreduce_rdd.py in ~/team2. Put it where your working command expects it:
-
+```bash
 kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- mkdir -p /opt/spark/work-dir/app
 
 kubectl -n $NAMESPACE cp \
@@ -122,12 +125,12 @@ kubectl -n $NAMESPACE cp \
 Optional check:
 
 kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- ls -l /opt/spark/work-dir/app
-
+```
 5️⃣ Run the PA4 baseline (many iterations, no stress)
 
 Now we reuse your working spark-submit layout, just with PA4-ish parameters.
 Example: M=50, R=10, iters=100 for a decent baseline.
-
+```bash
 cd ~/team2
 
 kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
@@ -150,6 +153,7 @@ kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
       --writeMode append
 "
 
+```
 
 
 This will:
@@ -167,7 +171,7 @@ in /opt/spark/work-dir/app inside the driver.
 6️⃣ Copy the baseline CSV out of the driver
 
 Back on cloud-c1-m1, grab the newest results_*.csv:
-
+```bash
 cd ~/team2
 mkdir -p pa4_results
 
@@ -175,18 +179,20 @@ LATEST=$(kubectl -n team2 exec "$DRIVER_POD" -- bash -lc "ls -1t /opt/spark/work
 echo "Found in pod: $LATEST"
 
 kubectl -n team2 cp "$DRIVER_POD":"$LATEST" ./pa4_results/$(basename "$LATEST")
-
+```
 
 📥 Step 1 — Copy baseline data from cluster → your laptop
+```bash
 scp -r c1m819381:/home/cc/team2/pa4_results ./pa4_results_baseline_local/
 scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_cdf.png ./pa4_results_baseline_local/
 scp c1m819381:/home/cc/team2/pa4_baseline_mapreduce_cdf.png ./pa4_results_baseline_local/
 scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_percentiles.csv ./pa4_results_baseline_local/
-
+```
 
 ✅ Run plotting script correctly
 
 From inside ~/team2:
+```bash
 cd ~/team2
 source venv/bin/activate          # 🔥 MUST ACTIVATE venv
 
