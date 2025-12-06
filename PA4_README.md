@@ -6,40 +6,8 @@
 ssh c1m819381
 
 
-this seems to run a mapreduce job 
 
-```bash
-kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
-  /spark-3.1.1-bin-hadoop3.2/bin/spark-submit \
-    --master spark://spark-master-svc:7077 \
-    --conf spark.driver.host=$DRIVER_IP \
-    --conf spark.driver.port=7076 \
-    --conf spark.blockManager.port=7079 \
-    --conf spark.ui.showConsoleProgress=true \
-    --conf spark.dynamicAllocation.enabled=false \
-    --conf spark.executor.instances=5 \
-    --conf spark.executor.cores=1 \
-    --conf spark.executor.memory=2g \
-    --conf spark.cores.max=5 \
-    --jars /tmp/jars/mongo-spark-connector_2.12-10.3.0.jar,/tmp/jars/mongodb-driver-sync-4.11.1.jar,/tmp/jars/mongodb-driver-core-4.11.1.jar,/tmp/jars/bson-4.11.1.jar \
-    /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
-      --collections \"readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5\" \
-      --M 10 \
-      --R 2 \
-      --iters 3 \
-      --writeMode append
-"
-```
-
-
-try this for setup???
-
-
-I’ll give you a from-cloud-c1-m1-only sequence that:
-
-Uses your working spark-submit command
-
-Runs a PA4-style baseline (many iterations, no stress)
+#Runs a PA4-style baseline (many iterations, no stress)
 
 Leaves results ready for plotting with plot_pa3_cdf.py
 
@@ -205,7 +173,7 @@ scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_percentiles.csv ./pa4_resul
 
 
 
-🔥 PHASE 2 — Stress Run (with stress-ng active on same node as Spark driver)
+#PHASE 2 — Stress Run (with stress-ng active on same node as Spark driver)
 Terminal A — Deploy the stress workload
 ```bash
 cd ~/team2
@@ -224,10 +192,10 @@ If they are NOT on same node → we will pin them manually (I will help if neede
 STRESS_POD=$(kubectl -n team2 get pod -l app=pa4-stressng -o jsonpath='{.items[0].metadata.name}')
 echo $STRESS_POD
 ```
-4. Start system stress (CPU+MEM+IO load) — 10 minutes
+4. Start system stress (CPU+MEM+IO load) — 20 minutes
 ```bash
 kubectl -n team2 exec $STRESS_POD -- \
-    stress-ng --cpu 4 --io 2 --vm 2 --vm-bytes 1G --timeout 600s &
+    stress-ng --cpu 4 --io 2 --vm 2 --vm-bytes 1G --timeout 1200s &
 ```
 Terminal B — Run Spark PA4 workload under stress
 
@@ -269,7 +237,7 @@ pip install pandas numpy matplotlib --quiet   # only needed once
 python3 plot_pa3_cdf.py ./pa4_results/stress pa4_stress
 ```
 
-📥 Step 1 — Copy baseline data from cluster → your laptop
+📥 Step 1 — Copy stress data from cluster → your laptop
 ```bash
 scp -r c1m819381:/home/cc/team2/pa4_results ./pa4_results_stress_local/
 scp c1m819381:/home/cc/team2/pa4_stress_iter_total_cdf.png ./pa4_results_stress_local/
@@ -277,69 +245,6 @@ scp c1m819381:/home/cc/team2/pa4_stress_mapreduce_cdf.png ./pa4_results_stress_l
 scp c1m819381:/home/cc/team2/pa4_stress_iter_total_percentiles.csv ./pa4_results_stress_local/
 ```
 
-
-
-### 1: Baseline - No Stress
-
-```bash
-# 1. SSH into cluster master
-
-# 2. Get Spark driver pod name
-POD=$(kubectl -n team2 get pod -l app=sparkDriverApp -o jsonpath='{.items[0].metadata.name}')
-
-# 3. Copy PA4 script to driver pod
-kubectl -n team2 cp smart_house_mapreduce_rdd.py $POD:/opt/spark/work-dir/
-
-# 4. Run baseline experiment (100 iterations)
-kubectl -n team2 exec -it $POD -- bash -lc "
-  POD_IP=\$(hostname -i)
-  /opt/spark/bin/spark-submit \
-    --master spark://spark-master-svc:7077 \
-    --conf spark.driver.host=\$POD_IP \
-    --conf spark.driver.port=7078 \
-    --conf spark.blockManager.port=7079 \
-    --conf spark.ui.showConsoleProgress=false \
-    --conf spark.dynamicAllocation.enabled=false \
-    --conf spark.executor.instances=5 \
-    --conf spark.executor.cores=1 \
-    --conf spark.executor.memory=2g \
-    --conf spark.cores.max=5 \
-    --jars /opt/spark/work-dir/jars/mongo-spark-connector_2.12-10.3.0.jar,/opt/spark/work-dir/jars/mongodb-driver-sync-4.11.1.jar,/opt/spark/work-dir/jars/mongodb-driver-core-4.11.1.jar,/opt/spark/work-dir/jars/bson-4.11.1.jar \
-    /opt/spark/work-dir/smart_house_mapreduce_rdd.py \
-      --collections readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5 \
-      --iters 100 \
-      --M 50 \
-      --R 5 \
-      --writeMode overwrite
-"
-
-# 5. Copy results from pod to master
-kubectl -n team2 cp $POD:/opt/spark/work-dir/pa4_results.csv /home/cc/team2/results_baseline.csv
-
-# 6. Copy to your laptop
-scp c1m819381:/home/cc/team2/results_baseline.csv .
-```
-
-### 2: Under Stress 
-
-```bash
-# 1. Deploy stress-ng pod 
-kubectl -n team2 apply -f pa4-stressng-job.yaml
-
-# 2. Verify stress pod is on same node as driver
-kubectl -n team2 get pods -o wide | grep -E "spark-driver|stressng"
-
-# 3. Get stress pod name
-STRESS_POD=$(kubectl -n team2 get pod -l app=pa4-stressng -o jsonpath='{.items[0].metadata.name}')
-
-# 4. Start stress workload in background
-kubectl -n team2 exec $STRESS_POD -- stress-ng --cpu 4 --io 2 --vm 2 --vm-bytes 1G --timeout 600s &
-
-# 5. Run experiment (same as baseline) (repeat steps from  1)
-
-# 6. Copy results
-kubectl -n team2 cp $POD:/opt/spark/work-dir/pa4_results.csv /home/cc/team2/results_stress.csv
-```
 
 ### Experiment 3a: Manual Migration
 
