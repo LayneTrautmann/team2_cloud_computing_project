@@ -122,7 +122,7 @@ kubectl -n $NAMESPACE cp \
   "$DRIVER_POD":/opt/spark/work-dir/app/smart_house_mapreduce_rdd.py
 
 
-Optional check:
+# Optional check:
 
 kubectl -n $NAMESPACE exec -it "$DRIVER_POD" -- ls -l /opt/spark/work-dir/app
 ```
@@ -181,14 +181,6 @@ echo "Found in pod: $LATEST"
 kubectl -n team2 cp "$DRIVER_POD":"$LATEST" ./pa4_results/$(basename "$LATEST")
 ```
 
-📥 Step 1 — Copy baseline data from cluster → your laptop
-```bash
-scp -r c1m819381:/home/cc/team2/pa4_results ./pa4_results_baseline_local/
-scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_cdf.png ./pa4_results_baseline_local/
-scp c1m819381:/home/cc/team2/pa4_baseline_mapreduce_cdf.png ./pa4_results_baseline_local/
-scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_percentiles.csv ./pa4_results_baseline_local/
-```
-
 ✅ Run plotting script correctly
 
 From inside ~/team2:
@@ -199,12 +191,91 @@ source venv/bin/activate          # 🔥 MUST ACTIVATE venv
 pip install pandas numpy matplotlib --quiet   # only needed once
 
 python3 plot_pa3_cdf.py ./pa4_results pa4_baseline
+```
 
-
+📥 Step 1 — Copy baseline data from cluster → your laptop
+```bash
+scp -r c1m819381:/home/cc/team2/pa4_results ./pa4_results_baseline_local/
+scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_cdf.png ./pa4_results_baseline_local/
+scp c1m819381:/home/cc/team2/pa4_baseline_mapreduce_cdf.png ./pa4_results_baseline_local/
+scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_percentiles.csv ./pa4_results_baseline_local/
 ```
 
 
 
+
+
+🔥 PHASE 2 — Stress Run (with stress-ng active on same node as Spark driver)
+Terminal A — Deploy the stress workload
+```bash
+cd ~/team2
+
+# 1. Launch stress pod
+kubectl -n team2 apply -f pa4-stressng-job.yaml
+
+# 2. Confirm both driver + stress are on SAME NODE
+kubectl -n team2 get pods -o wide | grep -E "spark|stress"
+```
+
+If they are NOT on same node → we will pin them manually (I will help if needed).
+
+3. Capture stress pod name
+```bash
+STRESS_POD=$(kubectl -n team2 get pod -l app=pa4-stressng -o jsonpath='{.items[0].metadata.name}')
+echo $STRESS_POD
+```
+4. Start system stress (CPU+MEM+IO load) — 10 minutes
+```bash
+kubectl -n team2 exec $STRESS_POD -- \
+    stress-ng --cpu 4 --io 2 --vm 2 --vm-bytes 1G --timeout 600s &
+```
+Terminal B — Run Spark PA4 workload under stress
+
+When you run stress workloads, store into separate folders:
+```bash
+mkdir -p ~/team2/pa4_results/stress
+kubectl -n team2 cp "$DRIVER_POD":/opt/spark/work-dir/app/results_M10_R2_iters100_* \
+    ~/team2/pa4_results/stress/
+```
+
+Use the same working baseline command but change --iters (100+ recommended under stress):
+```bash
+/kubectl -n team2 exec -it "$DRIVER_POD" -- bash -lc "
+  /spark-3.1.1-bin-hadoop3.2/bin/spark-submit \
+    --master spark://spark-master-svc:7077 \
+    --conf spark.driver.host=$DRIVER_IP \
+    --conf spark.driver.port=7076 \
+    --conf spark.blockManager.port=7079 \
+    --conf spark.dynamicAllocation.enabled=false \
+    --conf spark.executor.instances=2 \
+    --conf spark.executor.cores=1 \
+    --conf spark.executor.memory=2g \
+    --conf spark.cores.max=2 \
+    --jars /tmp/jars/mongo-spark-connector_2.12-10.3.0.jar,/tmp/jars/mongodb-driver-sync-4.11.1.jar,/tmp/jars/mongodb-driver-core-4.11.1.jar,/tmp/jars/bson-4.11.1.jar \
+    /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
+      --collections \"readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5\" \
+      --M 10 --R 2 --iters 100 --writeMode append
+"
+```
+✅ Run plotting script correctly
+
+From inside ~/team2:
+```bash
+cd ~/team2
+source venv/bin/activate          # 🔥 MUST ACTIVATE venv
+
+pip install pandas numpy matplotlib --quiet   # only needed once
+
+python3 plot_pa3_cdf.py ./pa4_results/stress pa4_stress
+```
+
+📥 Step 1 — Copy baseline data from cluster → your laptop
+```bash
+scp -r c1m819381:/home/cc/team2/pa4_results ./pa4_results_stress_local/
+scp c1m819381:/home/cc/team2/pa4_stress_iter_total_cdf.png ./pa4_results_stress_local/
+scp c1m819381:/home/cc/team2/pa4_stress_mapreduce_cdf.png ./pa4_results_stress_local/
+scp c1m819381:/home/cc/team2/pa4_stress_iter_total_percentiles.csv ./pa4_results_stress_local/
+```
 
 
 
