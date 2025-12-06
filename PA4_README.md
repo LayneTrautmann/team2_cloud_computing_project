@@ -7,7 +7,7 @@ ssh c1m819381
 
 
 
-#Runs a PA4-style baseline (many iterations, no stress)
+# Runs a PA4-style baseline (many iterations, no stress)
 
 Leaves results ready for plotting with plot_pa3_cdf.py
 
@@ -173,7 +173,7 @@ scp c1m819381:/home/cc/team2/pa4_baseline_iter_total_percentiles.csv ./pa4_resul
 
 
 
-#PHASE 2 — Stress Run (with stress-ng active on same node as Spark driver)
+# PHASE 2 — Stress Run (with stress-ng active on same node as Spark driver)
 Terminal A — Deploy the stress workload
 ```bash
 cd ~/team2
