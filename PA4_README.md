@@ -191,8 +191,11 @@ If they are NOT on same node → we will pin them manually (I will help if neede
 
 3. Capture stress pod name
 ```bash
-STRESS_POD=$(kubectl -n team2 get pod -l app=pa4-stressng -o jsonpath='{.items[0].metadata.name}')
-echo $STRESS_POD
+STRESS_POD=$(kubectl -n team2 get pods \
+  -l app=pa4-stressng \
+  --field-selector=status.phase=Running \
+  -o jsonpath='{.items[0].metadata.name}')
+echo "Using stress pod: $STRESS_POD"
 ```
 4. Start system stress (CPU+MEM+IO load) — 20 minutes
 ```bash
