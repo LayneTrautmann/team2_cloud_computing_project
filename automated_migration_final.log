@@ -1,0 +1,189 @@
+================================================================================
+PA4 AUTOMATED MIGRATION EXPERIMENT
+================================================================================
+Baseline p90 threshold: 5.5s
+Violation threshold: 5 consecutive iterations
+Total iterations: 100
+================================================================================
+
+Starting with driver pod: spark-driver-deploy-65d65f6878-k98vf
+Driver IP: 10.244.19.49
+
+
+[Iteration 1/100]
+  Running Spark job on pod spark-driver-deploy-65d65f6878-k98vf...
+  ⚠️  Latency: 76.430s (VIOLATED - threshold: 5.5s)
+  Violation count: 1/5
+
+[Iteration 2/100]
+  Running Spark job on pod spark-driver-deploy-65d65f6878-k98vf...
+  ⚠️  Latency: 76.750s (VIOLATED - threshold: 5.5s)
+  Violation count: 2/5
+
+[Iteration 3/100]
+  Running Spark job on pod spark-driver-deploy-65d65f6878-k98vf...
+  ⚠️  Latency: 76.382s (VIOLATED - threshold: 5.5s)
+  Violation count: 3/5
+
+[Iteration 4/100]
+  Running Spark job on pod spark-driver-deploy-65d65f6878-k98vf...
+  ⚠️  Latency: 76.811s (VIOLATED - threshold: 5.5s)
+  Violation count: 4/5
+
+[Iteration 5/100]
+  Running Spark job on pod spark-driver-deploy-65d65f6878-k98vf...
+  ⚠️  Latency: 77.941s (VIOLATED - threshold: 5.5s)
+  Violation count: 5/5
+
+================================================================================
+🚨 MIGRATION TRIGGERED - 5 consecutive violations detected!
+================================================================================
+Old driver pod: spark-driver-deploy-65d65f6878-k98vf
+Deleting stress pod to remove stressor...
+  job.batch "pa4-stressng" deleted from team2 namespace
+Restarting deployment: deployment.apps/spark-driver-deploy restarted
+
+Waiting for new driver pod to be ready...
+Waiting for deployment "spark-driver-deploy" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "spark-driver-deploy" rollout to finish: 1 old replicas are pending termination...
+Waiting for deployment "spark-driver-deploy" rollout to finish: 1 old replicas are pending termination...
+deployment "spark-driver-deploy" successfully rolled out
+Waiting for new driver pod to appear...
+  Retry 1/30...
+  Retry 2/30...
+  Retry 3/30...
+  Retry 4/30...
+  Retry 5/30...
+  Retry 6/30...
+  Retry 7/30...
+  Retry 8/30...
+  Retry 9/30...
+  Retry 10/30...
+  Retry 11/30...
+  Retry 12/30...
+  Retry 13/30...
+  Retry 14/30...
+  Found new pod: spark-driver-deploy-6df9d57cdc-t9kms
+
+New driver pod: spark-driver-deploy-6df9d57cdc-t9kms
+New driver IP: 10.244.19.50
+NAME                                   READY   STATUS    RESTARTS   AGE   IP             NODE           NOMINATED NODE   READINESS GATES
+spark-driver-deploy-6df9d57cdc-t9kms   1/1     Running   0          39s   10.244.19.50   cloud-c1-w17   <none>           <none>
+
+Setting up driver pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ✅ JARs and script copied to new driver pod
+================================================================================
+
+
+[Iteration 6/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.831s (VIOLATED - threshold: 5.5s)
+  Violation count: 1/5
+
+[Iteration 7/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.918s (VIOLATED - threshold: 5.5s)
+  Violation count: 2/5
+
+[Iteration 8/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.748s (VIOLATED - threshold: 5.5s)
+  Violation count: 3/5
+
+[Iteration 9/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.886s (VIOLATED - threshold: 5.5s)
+  Violation count: 4/5
+
+[Iteration 10/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 63.682s (VIOLATED - threshold: 5.5s)
+  Violation count: 5/5
+
+[Iteration 11/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.665s (VIOLATED - threshold: 5.5s)
+  Violation count: 6/5
+
+[Iteration 12/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.163s (VIOLATED - threshold: 5.5s)
+  Violation count: 7/5
+
+[Iteration 13/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.168s (VIOLATED - threshold: 5.5s)
+  Violation count: 8/5
+
+[Iteration 14/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.240s (VIOLATED - threshold: 5.5s)
+  Violation count: 9/5
+
+[Iteration 15/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.489s (VIOLATED - threshold: 5.5s)
+  Violation count: 10/5
+
+[Iteration 16/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 63.376s (VIOLATED - threshold: 5.5s)
+  Violation count: 11/5
+
+[Iteration 17/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.728s (VIOLATED - threshold: 5.5s)
+  Violation count: 12/5
+
+[Iteration 18/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 63.412s (VIOLATED - threshold: 5.5s)
+  Violation count: 13/5
+
+[Iteration 19/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 63.344s (VIOLATED - threshold: 5.5s)
+  Violation count: 14/5
+
+[Iteration 20/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.701s (VIOLATED - threshold: 5.5s)
+  Violation count: 15/5
+
+[Iteration 21/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.788s (VIOLATED - threshold: 5.5s)
+  Violation count: 16/5
+
+[Iteration 22/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 63.138s (VIOLATED - threshold: 5.5s)
+  Violation count: 17/5
+
+[Iteration 23/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 63.200s (VIOLATED - threshold: 5.5s)
+  Violation count: 18/5
+
+[Iteration 24/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.244s (VIOLATED - threshold: 5.5s)
+  Violation count: 19/5
+
+[Iteration 25/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.476s (VIOLATED - threshold: 5.5s)
+  Violation count: 20/5
+
+[Iteration 26/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.985s (VIOLATED - threshold: 5.5s)
+  Violation count: 21/5
+
+[Iteration 27/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...
+  ⚠️  Latency: 62.898s (VIOLATED - threshold: 5.5s)
+  Violation count: 22/5
+
+[Iteration 28/100]
+  Running Spark job on pod spark-driver-deploy-6df9d57cdc-t9kms...

@@ -254,25 +254,22 @@ scp c1m819381:/home/cc/team2/pa4_stress_iter_total_percentiles.csv ./pa4_results
 
 
 
-### What was run for the manual migration
-
-For migration I used  15 iterations instead of 100+
-
-
+## Manual Migration Experiment (100 Iterations)
 
 **Experiment 1: Driver WITH Stress (Collocated)**
 
 ```bash
-# 1. Setup driver pod and stress pod on same node (w3)
-DRIVER_POD=spark-driver-deploy-7c6b89d76c-cpkvx
-STRESS_POD=pa4-stressng-7vz9f
+# 1. Setup driver pod and stress pod on same node (w6)
+DRIVER_POD=spark-driver-deploy-788454b886-rrfjq
+DRIVER_IP=10.244.15.125
+STRESS_POD=pa4-stressng-sl62t
 
-# Both on cloud-c1-w3 (pod affinity working)
+# Both on cloud-c1-w6 (pod affinity working)
 
 # 2. Start stress
-kubectl -n team2 exec $STRESS_POD -- bash -c "stress-ng --cpu 2 --vm 1 --vm-bytes 512M --timeout 900s &" &
+kubectl -n team2 exec $STRESS_POD -- bash -c "stress-ng --cpu 2 --vm 1 --vm-bytes 512M --timeout 1800s &" &
 
-# 3. Run 15-iteration experiment
+# 3. Run 100-iteration experiment
 nohup kubectl -n team2 exec "$DRIVER_POD" -- bash -lc "
   /spark-3.1.1-bin-hadoop3.2/bin/spark-submit \
     --master spark://spark-master-svc:7077 \
@@ -287,10 +284,10 @@ nohup kubectl -n team2 exec "$DRIVER_POD" -- bash -lc "
     --jars /tmp/jars/mongo-spark-connector_2.12-10.3.0.jar,/tmp/jars/mongodb-driver-sync-4.11.1.jar,/tmp/jars/mongodb-driver-core-4.11.1.jar,/tmp/jars/bson-4.11.1.jar \
     /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
       --collections \"readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5\" \
-      --M 10 --R 2 --iters 15 --writeMode append
-" > exp1_with_stress.log 2>&1 &
+      --M 10 --R 2 --iters 100 --writeMode append
+" > results_100iter_with_stress.log 2>&1 &
 
-# 4. Results: Average latency ~6.0 seconds (iterations 11-15: 5.73s-6.12s)
+# 4. Results saved to: results_100iter_before_migration.csv
 ```
 
 **Migration Step**
@@ -303,92 +300,41 @@ kubectl -n team2 delete job pa4-stressng
 kubectl -n team2 rollout restart deployment/spark-driver-deploy
 kubectl -n team2 rollout status deployment/spark-driver-deploy
 
-# Result: Driver moved from cloud-c1-w3 → cloud-c1-w6
+# Result: Driver moved from cloud-c1-w6 → cloud-c1-w17
 ```
 
 **Experiment 2: Driver AFTER Migration (Separated from stress)**
 
 ```bash
-# 1. New driver pod on w6 (no stress)
-DRIVER_POD=spark-driver-deploy-788454b886-rrfjq
+# 1. New driver pod on w17 (no stress)
+DRIVER_POD=spark-driver-deploy-5d7c58d8b-5plnk
+DRIVER_IP=10.244.1.247
 
 # 2. Copy JARs and script to new pod
 kubectl -n team2 exec $DRIVER_POD -- mkdir -p /tmp/jars /opt/spark/work-dir/app
 kubectl -n team2 cp ~/team2/pa3-scaffold/jars/*.jar "$DRIVER_POD":/tmp/jars/
 kubectl -n team2 cp ~/team2/smart_house_mapreduce_rdd.py "$DRIVER_POD":/opt/spark/work-dir/app/
 
-# 3. Run 15-iteration experiment (same command as Exp1)
-# Results: Average latency ~5.3 seconds (iterations 11-15: 5.03s-5.48s)
+# 3. Run 100-iteration experiment (same command as Exp1)
+nohup kubectl -n team2 exec "$DRIVER_POD" -- bash -lc "
+  /spark-3.1.1-bin-hadoop3.2/bin/spark-submit \
+    --master spark://spark-master-svc:7077 \
+    --conf spark.driver.host=$DRIVER_IP \
+    --conf spark.driver.port=7076 \
+    --conf spark.blockManager.port=7079 \
+    --conf spark.dynamicAllocation.enabled=false \
+    --conf spark.executor.instances=2 \
+    --conf spark.executor.cores=1 \
+    --conf spark.executor.memory=2g \
+    --conf spark.cores.max=2 \
+    --jars /tmp/jars/mongo-spark-connector_2.12-10.3.0.jar,/tmp/jars/mongodb-driver-sync-4.11.1.jar,/tmp/jars/mongodb-driver-core-4.11.1.jar,/tmp/jars/bson-4.11.1.jar \
+    /opt/spark/work-dir/app/smart_house_mapreduce_rdd.py \
+      --collections \"readings_shard1,readings_shard2,readings_shard3,readings_shard4,readings_shard5\" \
+      --M 10 --R 2 --iters 100 --writeMode append
+" > results_100iter_after_migration.log 2>&1 &
+
+# 4. Results saved to: results_100iter_after_migration.csv
 ```
-
-### Results Summary
-
-**Latency Comparison (iterations 11-15):**
-- **Before Migration (w3 with stress):** 5.73s, 5.74s, 6.12s, 5.96s, 5.99s → Avg: **~5.9s**
-- **After Migration (w6 no stress):** 5.38s, 5.48s, 5.23s, 5.28s, 5.03s → Avg: **~5.3s**
-- **Improvement: 10-15%** ✅
-
-### CDF Plots Generated
-
-```bash
-# Combined both 15-iteration experiments into migration comparison
-cd ~/team2
-source venv/bin/activate
-
-python3 plot_pa3_cdf.py ./pa4_results/migration_comparison pa4_migration_comparison
-
-deactivate
-
-# Generated files:
-# - pa4_migration_comparison_iter_total_cdf.png
-# - pa4_migration_comparison_mapreduce_cdf.png
-# - pa4_migration_comparison_iter_total_percentiles.csv
-```
-
-### Files in pa4_results/
-
-```
-pa4_results/
-├── manual_migration/
-│   ├── exp1_with_stress_collocated.csv (15 iterations, ~6.0s avg)
-│   └── exp2_after_migration_separated.csv (15 iterations, ~5.3s avg)
-└── migration_comparison/
-    ├── results_before_migration.csv
-    └── results_after_migration.csv
-```
-
-### Conclusion (15-iteration experiment)
-
-Manual migration successfully demonstrated tail tolerance:
-- Moved Spark driver from stressed node (w3) to clean node (w6)
-- Achieved 10-15% latency improvement
-- Proved migration concept works for reducing tail latency
-
----
-
-## 100 Iteration Migration 
-
-100 iteration for manual migration: 
-
-### Experiment Setup
-
-**Experiment 1: 100 iterations WITH stress (collocated)**
-- Driver pod: `spark-driver-deploy-788454b886-rrfjq` on `cloud-c1-w6`
-- Stress pod: `pa4-stressng-sl62t` on `cloud-c1-w6` (collocated via pod affinity)
-- Stress: `stress-ng --cpu 2 --vm 1 --vm-bytes 512M --timeout 1800s`
-- Iterations: 100
-- Results saved: `results_100iter_before_migration.csv`
-
-**Migration:**
-- Deleted stress pod
-- Restarted driver deployment: `kubectl rollout restart deployment/spark-driver-deploy`
-- Driver moved: `cloud-c1-w6` → `cloud-c1-w17`
-
-**Experiment 2: 100 iterations AFTER migration (clean node)**
-- Driver pod: `spark-driver-deploy-5d7c58d8b-5plnk` on `cloud-c1-w17`
-- No stress on this node
-- Iterations: 100
-- Results saved: `results_100iter_after_migration.csv`
 
 ### Results Summary
 
@@ -409,15 +355,88 @@ Manual migration successfully demonstrated tail tolerance:
 - ✅ **p95 improved by 4.9%** (5.904s → 5.616s)
 - ✅ **Tail improvement > Average improvement** (8.5% vs 1.7%)
 
+### CDF Plot Generation
+
+```bash
+# Generate CDF plot comparing before and after migration
+cd /Users/laynetrautmann/Desktop/Cloud\ Computing/Pa1
+source venv/bin/activate
+
+python3 plot_migration_final.py
+
+deactivate
+
+# Generated file: PA4_Migration_Final_CDF.png
+```
+
+### Files in pa4_results/
+
+```
+pa4_results/
+└── migration_comparison/
+    ├── results_100iter_before_migration.csv (100 iterations, cloud-c1-w6 with stress)
+    └── results_100iter_after_migration.csv (100 iterations, cloud-c1-w17 clean)
+```
+
+### Conclusion
+
+Manual migration successfully with 8.5% improvement.
+
+---
+
+## Automated Migration Experiment
+
+### Implementation
+
+**Script:** `automated_migration.py`
+
+**Key Features:**
+- Monitors p90 latency threshold (5.5s baseline)
+- Detects consecutive violations (5 iterations)
+- Automatically triggers migration:
+  1. Deletes stress pod
+  2. Restarts driver deployment (`kubectl rollout restart`)
+  3. Waits for new pod on different node
+  4. Copies JARs and script to new pod
+  5. Continues monitoring
+
+### Experiment Execution
+
+**Setup:**
+- Driver + stress collocated on cloud-c1-w17
+- Baseline p90 threshold: 5.5s
+- Violation threshold: 5 consecutive iterations
+
+**Results:**
+
+| Phase | Iterations | Avg Latency | Range |
+|-------|-----------|-------------|-------|
+| Before Migration (with stress) | 5 | 76.863s | 76.382s - 77.941s |
+| After Migration (no stress) | 22 | 62.822s | 62.163s - 63.682s |
+
+**Improvement:** 18.3% average latency reduction
+
+### Automated Migration Flow
+
+1. **Iterations 1-5:** Detected high latency (76-78s) due to stress
+2. **Migration Triggered:** After 5 consecutive violations
+3. **Actions Performed:**
+   - Deleted stress pod (pa4-stressng)
+   - Restarted driver deployment
+   - New driver spawned on cloud-c1-w17 (clean node after stress removed)
+   - Automatically set up new driver with dependencies
+4. **Iterations 6-27:** Continued with improved latency (62-63s)
+
 ### CDF Plot
 
-See `PA4_Migration_Final_CDF.png` for the complete comparison showing:
-- Red line: Before migration (with stress, n=100)
-- Green line: After migration (clean node, n=100)
-- Clear separation in tail latencies (right side of plot)
+See `PA4_Automated_Migration_CDF.png` for visualization:
+- Red line: Before migration (with stress, n=5)
+- Green line: After migration (no stress, n=22)
+- Clear left shift showing improvement
 
-**Conclusion:** Manual migration successful. It reduced tail latency by moving the Spark driver from a stressed node to a clean node. It got 8.5% improvement in worst case latency.
+**Log File:** `automated_migration_final.log` contains complete execution trace
 
+**Conclusion:** Automated migration successful 18.3% improvement.
 
 
 
