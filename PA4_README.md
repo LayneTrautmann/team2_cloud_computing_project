@@ -366,7 +366,7 @@ python3 plot_migration_final.py
 
 deactivate
 
-# Generated file: PA4_Migration_Final_CDF.png
+# Generated file: PA4_Manual_Migration_CDF.png
 ```
 
 ### Files in pa4_results/
